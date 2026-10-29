@@ -996,11 +996,11 @@ test('X23 切磋：主动招式（必中）也能被魂影替，伤害为 0', ()
   const k = events.findIndex((e) => e.kind === 'skill' && e.skill === 'myriad-self');
   assert.ok(k >= 0, '先放万我');
   const after = events.slice(k);
-  assert.ok(after.some((e) => e.kind === 'mirror'), '狮子吼被魂影替掉');
   assert.ok(
-    !after.some((e) => e.kind === 'skill' && e.skill === 'lion-roar'),
-    '被魂影替的招式走不到伤害结算',
+    after.some((e) => e.kind === 'mirror'),
+    '狮子吼被魂影替掉',
   );
+  assert.ok(!after.some((e) => e.kind === 'skill' && e.skill === 'lion-roar'), '被魂影替的招式走不到伤害结算');
 });
 
 test('X23 切磋：暴击也打不出一发超过三成气血的伤害', () => {
@@ -1026,6 +1026,37 @@ test('X23 切磋：暴击也打不出一发超过三成气血的伤害', () => {
     }
   }
   assert.ok(crits > 0, '该抽到会心');
+});
+
+test('X23 切磋：蓝鲸现世不再顶满单次伤害封顶', () => {
+  const a = {
+    ...fighterAt(8, seededRng(1)),
+    hp: 300,
+    power: 40,
+    agility: 20,
+    speed: 30,
+    weapons: [],
+    skills: ['blue-whale' as const],
+  };
+  const b = {
+    ...fighterAt(8, seededRng(2)),
+    hp: 300,
+    power: 10,
+    agility: 0,
+    speed: 0,
+    weapons: [],
+    skills: [],
+  };
+  const events = fight(named(a, '甲'), named(b, '乙'), 'blue-whale-spar', [castOnce('blue-whale'), unarmedOnly()], {
+    damageScale: SPAR_DAMAGE_SCALE,
+    maxHitShare: SPAR_MAX_HIT_SHARE,
+  });
+  const hit = events.find(
+    (e): e is Extract<BattleEvent, { kind: 'skill' }> => e.kind === 'skill' && e.skill === 'blue-whale',
+  );
+  const damage = hit?.damage ?? 0;
+  assert.ok(damage > 0, '蓝鲸打中了');
+  assert.ok(damage < Math.floor(300 * SPAR_MAX_HIT_SHARE), `蓝鲸 ${damage} 不该顶满 30% 封顶`);
 });
 
 test('X9 魂牵梦绕：控住就把对方牵进梦里（skip dream），入梦这一拍挨打不判闪避', () => {

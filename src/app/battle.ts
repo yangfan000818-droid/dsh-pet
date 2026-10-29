@@ -750,6 +750,8 @@ const CRIT_SKILL_CHANCE = 0.18;
 const LION_HP_SHARE = 0.6;
 /** 狮子吼的伤害基数（X20 从 15 提到 22：控制改成有几率以后，这一招不能比普通攻击还弱） */
 const LION_BASE = 22;
+/** 蓝鲸现世在切磋里的额外收束（X23）：原式 34 + 灵力 + 整份破势，缩放后仍常顶满 30% 单次封顶 */
+const BLUE_WHALE_SPAR_SHARE = 0.75;
 
 /** 泡泡护体挡伤后剩下的比例（§平衡：X20 从 0.55 提到 0.78，把这一招的持有优势收回 0.6 以内） */
 const BUBBLE_FACTOR = 0.78;
@@ -1171,8 +1173,9 @@ function runFight(
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'blue-whale') {
-        // 约一次满额法宝攻击的 1.5–2 倍：固定伤害 + 灵力 + 整份破势
-        const applied = scaledApplyDamage(foe, 34 + me.f.power + Math.floor(foe.f.hp * HP_BONUS));
+        // 约一次满额法宝攻击的 1.5–2 倍：固定伤害 + 灵力 + 整份破势；切磋里再收 25%（X23）
+        const raw = 34 + me.f.power + Math.floor(foe.f.hp * HP_BONUS);
+        const applied = scaledApplyDamage(foe, sparRules ? Math.floor(raw * BLUE_WHALE_SPAR_SHARE) : raw);
         events.push({
           actor: self,
           kind: 'skill',
