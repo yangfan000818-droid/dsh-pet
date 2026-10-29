@@ -1551,7 +1551,7 @@ test('X21 前有古人：古人虚影从出手方冲出去补一击，命中那�
     seq(),
   );
   const [shot] = shotsOf(steps);
-  assert.deepEqual([shot.shot.kind, shot.shot.track, shot.shot.hitFx], ['古人虚影', 'thrust', '命中-斩']);
+  assert.deepEqual([shot.shot.kind, shot.shot.track, shot.shot.hitFx], ['古人虚影', 'line', '命中-斩']);
   assert.ok(
     steps.some((step) => step.who === 1 && step.anim === '受击-正面'),
     '补的那一击对方要起反应',
@@ -1581,8 +1581,20 @@ test('X21 吃苦吃亏：咬一口时对方播受击-被吃，吃泡泡不播受
   );
 });
 
-test('X21 逆流护身印：反弹那一刻只刷台词与血条，不切断攻击方刚出的手', () => {
-  const steps = timeline([start(0), { actor: 1, kind: 'reverse', damage: 14, hp: [86, 100] }], NAMES, seq());
+test('X21 逆流护身印：白袍铺在出手方身上，反弹那一刻只刷台词与血条，不切断攻击方刚出的手', () => {
+  const steps = timeline(
+    [
+      start(0),
+      decide(1, { kind: 'skill', skill: 'reverse-seal' }),
+      { actor: 1, kind: 'skill', skill: 'reverse-seal', hp: [100, 100] },
+      { actor: 1, kind: 'reverse', damage: 14, hp: [86, 100] },
+    ],
+    NAMES,
+    seq(),
+  );
+  const [robe] = shotsOf(steps);
+  assert.deepEqual([robe.shot.kind, robe.shot.hold?.anchor, robe.who], ['逆流袍', 'self', 1]);
+  assert.ok(robe.shot.hold && robe.shot.hold.ms >= 2_000, '白袍要铺满一整个回合，不是闪一下');
   assert.ok(
     steps.some((step) => step.line && step.who === 1),
     '反弹这一刻出「原样打回」的台词',
@@ -1630,11 +1642,24 @@ test('X22 无头鬼影：黑影冲出去取首级，对方播受击-断头', () 
   );
 });
 
-test('X22 鬼敲门：敲门声只刷台词与血条，不排受击切断它自己的出手', () => {
+test('X22 鬼敲门：门立在两只中间，敲门声只刷台词与血条，不排受击切断它自己的出手', () => {
   const steps = timeline(
-    [start(0), { actor: 1, kind: 'knock', damage: 26, hp: [100, 74] }, decide(1, { kind: 'unarmed' })],
+    [
+      start(0),
+      decide(0, { kind: 'skill', skill: 'ghost-knock' }),
+      { actor: 0, kind: 'skill', skill: 'ghost-knock', hp: [100, 100] },
+      { actor: 1, kind: 'knock', damage: 26, hp: [100, 74] },
+      decide(1, { kind: 'unarmed' }),
+    ],
     NAMES,
     seq(),
+  );
+  const [door] = shotsOf(steps);
+  assert.deepEqual([door.shot.kind, door.shot.hold?.anchor], ['门', 'mid']);
+  assert.ok((door.shot.hold?.shake ?? 0) > 0, '门要跟着敲门声轻颤');
+  assert.ok(
+    shotsOf(steps).some((step) => step.shot.hold?.anchor === 'self' && step.shot.kind === '门'),
+    '敲门声真的响那一刻，门在挨门的人面前再抖一下',
   );
   assert.ok(
     steps.some((step) => step.line && step.who === 1),
@@ -1657,8 +1682,17 @@ test('X22 鬼画：符纹从指尖飞过去贴在对方身上', () => {
     NAMES,
     seq(),
   );
-  const [shot] = shotsOf(steps);
-  assert.deepEqual([shot.shot.kind, shot.shot.track], ['符画', 'line']);
+  const shots = shotsOf(steps);
+  assert.deepEqual([shots[0].shot.kind, shots[0].shot.track], ['符画', 'line']);
+  // X24：符纹等手指画完才离手（素材 2.7 秒处），不能一出招就飞过去
+  const cast = steps.find((step) => step.anim === '出手-鬼画');
+  assert.ok(cast, '要先播画符的出手动作');
+  assert.equal(shots[0].at, cast.at + releaseOffset('出手-鬼画'), '符纹在离手时刻起飞');
+  const stick = shots.find((step) => step.shot.hold);
+  assert.ok(stick, '符纹贴上以后要停在对方身上一会儿');
+  assert.deepEqual([stick!.shot.kind, stick!.shot.hold?.anchor], ['符画', 'foe']);
+  assert.equal(stick!.at, shots[0].at + shots[0].shot.flightMs, '贴在对方身上的时刻就是命中时刻');
+  assert.equal(stick!.shot.hold?.dy, 0.1, '往下挪一点，别糊在脸上');
 });
 
 test('X22 鬼血：三颗血珠一起飞过去', () => {

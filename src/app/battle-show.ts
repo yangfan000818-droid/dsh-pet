@@ -175,9 +175,10 @@ export type FxAssetName =
   // X16：降龙十八掌的金龙、送友风的清风
   | '金龙'
   | '清风'
-  // X21：万我大手印的巨掌、前有古人的古人虚影（逆流护身印的袍子直接画在动作素材里）
+  // X21：万我大手印的巨掌、前有古人的古人虚影、逆流护身印的白袍（X24 起白袍单独铺在出手方身上）
   | '巨掌'
   | '古人虚影'
+  | '逆流袍'
   // X22：鬼手、无头鬼影、鬼敲门的门、鬼画的符、鬼血的血珠
   | '鬼手'
   | '无头鬼影'
@@ -442,6 +443,9 @@ export const FX_ASSETS: FxAssetName[] = Array.from(
     // 魂屑（X9）：万我的 `mirror` 事件和魂牵梦绕的命中都用它，不在出手表的飞行物里
     '命中-魂碎',
     '乌云',
+    // 静止贴图（X24）：白袍、门只在时间线里铺，不在出手表里，开窗时一并预取
+    '逆流袍',
+    '门',
     // 定仙游的碧芒（Y2 素材清单）：不在出手表里，开窗时一并预取
     '碧光',
   ]),
@@ -511,12 +515,13 @@ export const RELEASE: Record<string, { ms: number; hand: [number, number]; catch
   '出手-护身印': { ms: 1_500, hand: [282, 232] },
   '出手-古人': { ms: 2_250, hand: [195, 205] },
   '出手-吃苦': { ms: 1_250, hand: [255, 152] },
-  // X22：鬼手掐到最远的那一帧 / 鬼影指向定住 / 敲门抬手叩下 / 鬼画指尖在胸前停住 / 鬼血指尖一抹
+  // X22：鬼手掐到最远的那一帧 / 鬼影指向定住 / 敲门抬手叩下 / 鬼画符成、双手向两侧推出 / 鬼血掌心三颗血珠成形
   '出手-鬼手': { ms: 917, hand: [188, 229] },
   '出手-鬼影': { ms: 2_000, hand: [230, 200] },
-  '出手-敲门': { ms: 1_500, hand: [280, 200] },
-  '出手-鬼画': { ms: 1_500, hand: [280, 200] },
-  '出手-鬼血': { ms: 1_500, hand: [280, 200] },
+  // X24 重做的三段素材重新量的时刻：敲门叩第一下、鬼画符纹画完推出去、鬼血血珠滑出
+  '出手-敲门': { ms: 1_400, hand: [280, 200] },
+  '出手-鬼画': { ms: 2_700, hand: [235, 236] },
+  '出手-鬼血': { ms: 2_000, hand: [266, 228] },
   // 对手动作（Y2）：离手时刻与手的位置按 YA 素材「量出来的时刻」填；熔岩鳄、他派蛊师复用狮獒 / 韩不留，
   // 调用方把它们的动画前缀传成被复用的那只
   '对手-野狗-出手': { ms: 1_833, hand: [0, 250] },
@@ -621,6 +626,12 @@ export interface Shot {
   surge?: true;
   /** 银托盘的回旋（X8）：第二段绕到背后磕的时刻、飞回手里的时刻，以及第二段的结果 */
   boomerang?: { secondMs: number; totalMs: number; second: 'hit' | 'blocked' | 'decoy' | 'miss' | 'none' };
+  /**
+   * 静止贴图（X24）：不飞，铺在 `anchor` 那一边 ms 毫秒（默认自己）。
+   * 逆流护身印的白袍、鬼敲门的门、贴在身上的符纹用它；`shake` 左右抖、`spin` 慢慢转，
+   * `dy` 往下挪多少（占舞台高的比例，白袍要露出头，所以往下压一点）
+   */
+  hold?: { ms: number; anchor?: 'self' | 'foe' | 'mid'; shake?: number; spin?: number; dy?: number };
 }
 
 /**
@@ -956,6 +967,22 @@ export function timeline(
     steps.push({ at, who, shot, hp });
     // 命中按第一发到达算（水枪三发、声波三道）；反向的鲸吞按最后一颗灵光飞回嘴边算（那一刻回血）
     return at + shot.flightMs + (fly.reverse ? (shot.count - 1) * shot.gapMs : 0);
+  };
+
+  /** 铺一张静止贴图（X24）：白袍、门、贴住的符纹；不飞，到点自己淡出 */
+  const pushHold = (
+    at: number,
+    who: 0 | 1,
+    kind: FxAssetName,
+    hp: [number, number],
+    hold: NonNullable<Shot['hold']>,
+  ): void => {
+    steps.push({
+      at,
+      who,
+      shot: { kind, track: 'line', flightMs: hold.ms, count: 1, gapMs: 0, hitFx: kind, hand: [0, 0], hold },
+      hp,
+    });
   };
 
   /**
@@ -1385,6 +1412,20 @@ export function timeline(
       continue;
     }
 
+    // 逆流护身印（X21）：白袍铺在出手方身上（X24 返修：原来只有一句台词，画面上什么都没有）
+    if (event.kind === 'skill' && event.skill === 'reverse-seal') {
+      pushHold(at, event.actor, '逆流袍', event.hp, { ms: 2_600, anchor: 'self', dy: 0.12 });
+      if (line !== undefined) steps.push({ at, who: event.actor, line, hp: event.hp });
+      continue;
+    }
+
+    // 鬼敲门（X22）：门立在两只中间、随着敲门声轻颤（X24 返修：原来只有一句台词）
+    if (event.kind === 'skill' && event.skill === 'ghost-knock') {
+      pushHold(at, event.actor, '门', event.hp, { ms: 2_200, anchor: 'mid', shake: 3 });
+      if (line !== undefined) steps.push({ at, who: event.actor, line, hp: event.hp });
+      continue;
+    }
+
     // 逆流护身印（X21）：白袍把这一下弹回去——只刷台词与血条。攻击方刚出完手、下一手就在眼前，
     // 排整段受击会把它的出手从中间切断；这一步靠台词「原样打回」和血条变化交代
     if (event.kind === 'reverse') {
@@ -1394,7 +1435,7 @@ export function timeline(
 
     // 前有古人（X21）：古人虚影从出手方冲出去补一击，命中那一刻对方受击
     if (event.kind === 'ancient') {
-      const fly: Fly = { kind: '古人虚影', track: 'thrust', hitFx: '命中-斩' };
+      const fly: Fly = { kind: '古人虚影', track: 'line', hitFx: '命中-斩' };
       const impact = pushShot(at, event.actor, '出手-古人', fly, hpBefore);
       pushReaction(impact, (event.actor ^ 1) as 0 | 1, HIT_ANIM, event.hp);
       steps.push({ at: impact, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
@@ -1409,8 +1450,9 @@ export function timeline(
     }
 
     // 鬼敲门（X22）：门后的人浑身一震——只刷台词与血条。敲门声在它自己出手的那一瞬结算，
-    // 排整段受击会把它紧接着的出手切断
+    // 排整段受击会把它紧接着的出手切断；门在那一瞬再抖一下（X24）
     if (event.kind === 'knock') {
+      pushHold(at, event.actor, '门', event.hp, { ms: 600, anchor: 'self', shake: 4 });
       steps.push({ at, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
       continue;
     }
@@ -1418,7 +1460,10 @@ export function timeline(
     // 鬼画（X22）：符纹从指尖飞过去贴在对方身上（封被动；没被动可封时这一下带伤害，走下面的正常分支）
     if (event.kind === 'skill' && event.paint) {
       const fly: Fly = { kind: '符画', track: 'line', hitFx: '命中-魂碎' };
-      const impact = pushShot(at, event.actor, '出手-鬼画', fly, hpBefore);
+      // X24：符纹要等手指画完才离手——素材 2.7 秒处才把符推出去（RELEASE），按那一手起播的时刻加离手偏移
+      const impact = pushShot(cursor + releaseOffset('出手-鬼画'), event.actor, '出手-鬼画', fly, hpBefore);
+      // X24：符纹贴上以后在对方身上停一会儿（慢慢转），不是闪一下就没了；往下挪一点，别糊在脸上
+      pushHold(impact, event.actor, '符画', event.hp, { ms: 700, anchor: 'foe', spin: 30, dy: 0.1 });
       steps.push({ at: impact, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
       continue;
     }

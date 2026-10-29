@@ -127,6 +127,11 @@ export interface FxSpec {
     behind: [number, number];
     second: 'hit' | 'blocked' | 'decoy' | 'miss' | 'none';
   };
+  /**
+   * 静止贴图（X24）：不飞，就铺在 `from`（= `to`）那里 ms 毫秒，淡入淡出；`shake` 是左右抖动的像素，
+   * `spin` 是慢慢转的速度（度 / 秒）。白袍、门、贴在身上的符纹用它
+   */
+  hold?: { ms: number; shake: number; spin: number };
 }
 
 /**
@@ -181,14 +186,16 @@ const FX_SIZE: Record<FxAssetName, { size: number; spin?: number; grow?: number 
   金龙: { size: 0.9, grow: 0.55 },
   清风: { size: 0.5 },
   '命中-龙吟': { size: 0.56 },
-  // X21：万我大手印的巨掌比宠物大（一掌罩住对方），古人虚影从身侧冲出去
-  巨掌: { size: 0.62 },
-  古人虚影: { size: 0.42 },
-  // X22：鬼手、无头鬼影都比宠物大一点（掐住 / 罩住对方），门、符画、血珠按道具大小
+  // X21：万我大手印的巨掌罩住对方（X24 从 0.62 放到 0.8，原来像在头边挥手）；古人虚影要看得清是谁
+  // （X24 从 0.42 放到 0.62）；逆流护身印的白袍铺在出手方身上，约一身高
+  巨掌: { size: 0.8, grow: 0.45 },
+  古人虚影: { size: 0.62 },
+  逆流袍: { size: 0.72 },
+  // X22：鬼手、无头鬼影都比宠物大一点（掐住 / 罩住对方），门立得比人高、符画按巴掌大、血珠按道具大小
   鬼手: { size: 0.4 },
   无头鬼影: { size: 0.52 },
-  门: { size: 0.55 },
-  符画: { size: 0.34 },
+  门: { size: 0.78 },
+  符画: { size: 0.5 },
   血珠: { size: 0.12 },
   // 历练（Y2）：一转蛊和对手招式的飞行物
   犬影: { size: 0.28 },
@@ -271,6 +278,60 @@ export function feetPoint(stage: Stage): number {
 }
 
 /**
+ * 静止贴图（X24）：铺在出手方（白袍）/ 对方（贴住的符纹）/ 两只中间（门），按那一边的身高算大小。
+ * 不飞、不画命中特效，到 `ms` 自己淡出。
+ */
+function holdSpec(
+  shot: Shot,
+  who: 0 | 1,
+  stages: [Stage | null, Stage | null],
+  bounds: Rect,
+  shadow: boolean,
+): FxSpec | null {
+  const hold = shot.hold;
+  if (!hold) return null;
+  const anchor = hold.anchor ?? 'self';
+  const self = stages[who];
+  const foe = stages[(who ^ 1) as 0 | 1];
+  if ((anchor !== 'foe' && !self) || (anchor !== 'self' && !foe)) return null;
+  let center: [number, number];
+  let basis: number;
+  if (anchor === 'mid' && self && foe) {
+    const a = bodyPoint(self);
+    const b = bodyPoint(foe);
+    center = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    basis = Math.max(self.height, foe.height);
+  } else {
+    const stage = (anchor === 'self' ? self : foe) as Stage;
+    center = bodyPoint(stage);
+    basis = stage.height;
+  }
+  const size = Math.max(8, Math.round(FX_SIZE[shot.kind].size * basis));
+  // `dy` 按舞台高往下挪：白袍铺在身体上而不是连头一起盖住
+  const drop = Math.round((hold.dy ?? 0) * basis);
+  const at: [number, number] = [Math.round(center[0] - bounds.x), Math.round(center[1] + drop - bounds.y)];
+  return {
+    kind: shot.kind,
+    hitFx: shot.kind,
+    track: shot.track,
+    flightMs: hold.ms,
+    mirror: false,
+    from: at,
+    to: at,
+    size,
+    hitSize: 0,
+    hitAt: at,
+    spin: 0,
+    lift: 0,
+    grow: 1,
+    miss: false,
+    pieces: [{ delay: 0, hue: 0 }],
+    ...(shadow ? { shadow: true } : {}),
+    hold: { ms: hold.ms, shake: Math.round(hold.shake ?? 0), spin: hold.spin ?? 0 },
+  };
+}
+
+/**
  * 一发飞行物的几何（纯函数，可测）：两只的舞台 → 窗口内坐标的 `FxSpec`。
  * @param shot 时间线那一步带的飞行物
  * @param who 出手方（0 = 自家宠物，1 = 对手）；天雷（`sky`）是渡劫者自己
@@ -284,6 +345,7 @@ export function fxSpec(
   bounds: Rect,
   shadow = false,
 ): FxSpec | null {
+  if (shot.hold) return holdSpec(shot, who, stages, bounds, shadow);
   let start: [number, number];
   let end: [number, number];
   let target: Stage;
@@ -711,6 +773,19 @@ function loop(now) {
     item.left += dt;
     var used = item.left - item.delay;
     if (used < 0) continue; // 还没起飞（齐发时逐发错开）
+    if (s.hold) {
+      // 静止贴图（X24）：原地淡入、抖 / 慢慢转，到点淡出；不飞、不画命中特效
+      var fadeIn = Math.min(1, used / 200);
+      var fadeOut = s.hold.ms - used < 220 ? Math.max(0, (s.hold.ms - used) / 220) : 1;
+      var wobble = s.hold.shake ? Math.sin(used / 45) * s.hold.shake : 0;
+      var held = s.hold.spin ? ((s.hold.spin * used) / 1000) * Math.PI / 180 : 0;
+      place(item.node, s.size, false, s.from[0] + wobble, s.from[1], held, 1, Math.min(fadeIn, fadeOut));
+      if (used >= s.hold.ms) {
+        item.node.remove();
+        FX.items.splice(i, 1);
+      }
+      continue;
+    }
     if (s.boomerang) {
       if (!boomerang(item, used)) {
         item.node.remove();
@@ -807,6 +882,9 @@ window.fx = {
               behind: [spec.boomerang.behind[0], spec.boomerang.behind[1]],
               second: String(spec.boomerang.second),
             }
+          : null,
+        hold: spec.hold
+          ? { ms: Number(spec.hold.ms) || 0, shake: Number(spec.hold.shake) || 0, spin: Number(spec.hold.spin) || 0 }
           : null,
         from: [spec.from[0], spec.from[1]],
         to: [spec.to[0], spec.to[1]],
