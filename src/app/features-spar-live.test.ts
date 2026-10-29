@@ -430,6 +430,8 @@ test('X19 隔空切磋逐手局（应战方）：自动应战打完才记账，�
       await until(() => client.done !== null, '挑战方开着');
       // 让 app 快进把剩下的手演完；账仍然是打完才记
       assert.equal(fightCount(home), 0, '打完之前不记账');
+      // 三扇窗先开、菜单后换「快进」：等菜单真换过来再点，慢机器上先点会被当成未知项丢掉
+      await until(() => (extras.menus[extras.menus.length - 1] ?? []).includes('修炼/快进'), '打的时候换成快进');
       clicks.push('修炼/快进');
       const events = await client.done;
       assert.ok(events, '这一场打完了');
