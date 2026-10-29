@@ -6,7 +6,7 @@ import { createDashRig, screenUnion } from '../battle-dash';
 import type { DashFoe } from '../battle-dash';
 import type { TurnDecision } from '../battle-live';
 import type { Action, BattleEvent, BattleView, Fighter } from '../battle';
-import { fairSparPair } from '../battle';
+import { fairSparPair, SPAR_DAMAGE_SCALE, SPAR_MAX_HIT_SHARE } from '../battle';
 import { BattleShow, LINE_MS, SHOW_ANIMS, swapSides, timeline } from '../battle-show';
 import type { Shot } from '../battle-show';
 import { stageLabel } from '../cultivation';
@@ -354,6 +354,8 @@ export function createSpar(ctx: FeatureContext): Spar {
               show: sides,
               lineRng: show.lineRng,
               farewell: show.live.farewell === true,
+              damageScale: SPAR_DAMAGE_SCALE,
+              maxHitShare: SPAR_MAX_HIT_SHARE,
               decide: decideLive,
               think: () => show.think?.(),
               log: ctx.log,
@@ -369,6 +371,8 @@ export function createSpar(ctx: FeatureContext): Spar {
               show: sides,
               lineRng: show.lineRng,
               farewell: show.live.farewell === true,
+              damageScale: SPAR_DAMAGE_SCALE,
+              maxHitShare: SPAR_MAX_HIT_SHARE,
               decide: decideLive,
               think: () => show.think?.(),
               log: ctx.log,

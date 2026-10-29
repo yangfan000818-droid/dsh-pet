@@ -474,6 +474,10 @@ export interface LiveVersusOptions {
   timeline?: TimelineOptions;
   /** 串门切磋的逐手局两边都传 true（X16）；隔空切磋、心魔、秘境都不传 */
   farewell?: boolean;
+  /** 切磋节奏（X23）：只给切磋 / 隔空传，两边必须一致；不传按 1 */
+  damageScale?: number;
+  /** 单次伤害封顶（X23）：只给切磋 / 隔空传，两边必须一致；不传不封顶 */
+  maxHitShare?: number;
   /** 本地这一手：返回 null（超时 / 没选 / 收摊）就按后备挑法出 */
   decide: (view: BattleView, index: number, signal: AbortSignal) => Promise<TurnDecision | null>;
   /** 演完一段、本地这一手还没定：宠物头上「想一想…」 */
@@ -615,6 +619,8 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
     try {
       let result = fightUntilDecision(options.a, options.b, options.seed, [actions[0], actions[1]], {
         farewell: options.farewell,
+        damageScale: options.damageScale,
+        maxHitShare: options.maxHitShare,
       });
       while (true) {
         if (disposed) return finish(null);
@@ -665,6 +671,8 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
         actions[need.side].push(picked.action);
         result = fightUntilDecision(options.a, options.b, options.seed, [actions[0], actions[1]], {
           farewell: options.farewell,
+          damageScale: options.damageScale,
+          maxHitShare: options.maxHitShare,
         });
       }
     } catch (error) {
@@ -775,6 +783,8 @@ export function startLiveServer(options: LiveServerOptions): LiveVersus {
     try {
       let result = fightUntilDecision(options.a, options.b, options.seed, [actions[0], actions[1]], {
         farewell: options.farewell,
+        damageScale: options.damageScale,
+        maxHitShare: options.maxHitShare,
       });
       while (true) {
         if (disposed) return finish(null);
@@ -830,6 +840,8 @@ export function startLiveServer(options: LiveServerOptions): LiveVersus {
         }
         result = fightUntilDecision(options.a, options.b, options.seed, [actions[0], actions[1]], {
           farewell: options.farewell,
+          damageScale: options.damageScale,
+          maxHitShare: options.maxHitShare,
         });
       }
     } catch (error) {

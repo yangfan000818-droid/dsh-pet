@@ -23,6 +23,8 @@ import {
   type BattleEvent,
   type Action,
   startingHp,
+  SPAR_DAMAGE_SCALE,
+  SPAR_MAX_HIT_SHARE,
 } from './battle.ts';
 import { fighterAt, seededRng } from './battle-testkit.ts';
 
@@ -937,6 +939,93 @@ test('X9 万我：必中的（烟花）照样打本体，魂影不顶', () => {
     assert.ok(events.slice(k).some((e) => e.kind === 'hit' && e.actor === 0 && e.weapon === 'firework'));
   }
   assert.ok(seen > 20, `该有几十场：${seen}`);
+});
+
+test('X23 切磋：必中的（烟花）也由魂影替，三重替完才打到本体', () => {
+  let seen = 0;
+  for (let i = 0; i < 40; i++) {
+    const a = { ...fighterAt(8, seededRng(i)), weapons: ['firework' as const], agility: 0, hp: 9_999 };
+    const b = {
+      ...fighterAt(8, seededRng(i + 3)),
+      skills: ['myriad-self' as const],
+      weapons: [],
+      agility: 0,
+      hp: 9_999,
+    };
+    const events = fight(
+      named(a, '甲'),
+      named(b, '乙'),
+      `myriad-sure-${i}`,
+      [always({ kind: 'weapon', weapon: 'firework' }), castOnce('myriad-self')],
+      { damageScale: SPAR_DAMAGE_SCALE, maxHitShare: SPAR_MAX_HIT_SHARE },
+    );
+    const k = events.findIndex((e) => e.kind === 'skill' && e.skill === 'myriad-self');
+    if (k < 0) continue;
+    seen++;
+    const after = events.slice(k);
+    assert.equal(after.filter((e) => e.kind === 'mirror').length, 3, '三重魂影都替必中');
+    const firstHit = after.findIndex((e) => e.kind === 'hit' && e.actor === 0 && e.weapon === 'firework');
+    assert.ok(firstHit >= 0, '魂影替完，烟花还是打到本体');
+    assert.equal(after.slice(0, firstHit).filter((e) => e.kind === 'mirror').length, 3, '三重替完才打本体');
+  }
+  assert.ok(seen > 20, `该有几十场：${seen}`);
+});
+
+test('X23 切磋：主动招式（必中）也能被魂影替，伤害为 0', () => {
+  const a = {
+    ...fighterAt(8, seededRng(1)),
+    weapons: [],
+    skills: ['myriad-self' as const],
+    agility: 0,
+    hp: 9_999,
+  };
+  const b = {
+    ...fighterAt(8, seededRng(2)),
+    weapons: [],
+    skills: ['lion-roar' as const],
+    agility: 0,
+    hp: 9_999,
+  };
+  const events = fight(
+    named(a, '甲'),
+    named(b, '乙'),
+    'myriad-skill',
+    [castOnce('myriad-self'), castOnce('lion-roar')],
+    { damageScale: SPAR_DAMAGE_SCALE, maxHitShare: SPAR_MAX_HIT_SHARE },
+  );
+  const k = events.findIndex((e) => e.kind === 'skill' && e.skill === 'myriad-self');
+  assert.ok(k >= 0, '先放万我');
+  const after = events.slice(k);
+  assert.ok(after.some((e) => e.kind === 'mirror'), '狮子吼被魂影替掉');
+  assert.ok(
+    !after.some((e) => e.kind === 'skill' && e.skill === 'lion-roar'),
+    '被魂影替的招式走不到伤害结算',
+  );
+});
+
+test('X23 切磋：暴击也打不出一发超过三成气血的伤害', () => {
+  let crits = 0;
+  for (let i = 0; i < 80; i++) {
+    const a = { ...fighterAt(29, seededRng(i)), skills: ['critical' as const] };
+    const b = fighterAt(29, seededRng(i + 100));
+    const events = fight(named(a, '甲'), named(b, '乙'), `spar-cap-${i}`, undefined, {
+      damageScale: SPAR_DAMAGE_SCALE,
+      maxHitShare: SPAR_MAX_HIT_SHARE,
+    });
+    const start = events[0];
+    assert.equal(start.kind, 'start');
+    const max = start.hp;
+    for (const e of events) {
+      if (e.kind === 'hit' && e.crit) crits++;
+      if (!('damage' in e) || typeof e.damage !== 'number' || e.damage <= 0) continue;
+      const targetMax = max[1 - e.actor];
+      assert.ok(
+        e.damage <= Math.max(1, Math.floor(targetMax * SPAR_MAX_HIT_SHARE)),
+        `第 ${i} 场 ${e.kind} 打了 ${e.damage}，目标上限 ${targetMax}`,
+      );
+    }
+  }
+  assert.ok(crits > 0, '该抽到会心');
 });
 
 test('X9 魂牵梦绕：控住就把对方牵进梦里（skip dream），入梦这一拍挨打不判闪避', () => {

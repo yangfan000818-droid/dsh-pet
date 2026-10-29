@@ -44,7 +44,17 @@ import { isIPv4 } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { z } from 'zod';
-import { BATTLE_VERSION, MOVE_IDS, SKILL_IDS, WEAPON_IDS, fight, rngFrom, statCap } from './battle';
+import {
+  BATTLE_VERSION,
+  MOVE_IDS,
+  SKILL_IDS,
+  SPAR_DAMAGE_SCALE,
+  SPAR_MAX_HIT_SHARE,
+  WEAPON_IDS,
+  fight,
+  rngFrom,
+  statCap,
+} from './battle';
 import type { FightOptions } from './battle';
 import type { Action, BattleEvent, Fighter, MoveId, SkillId, WeaponId } from './battle';
 import { MAX_STAGE } from './cultivation';
@@ -230,7 +240,11 @@ export function sparFight(
   hostNonce: string,
   options?: FightOptions,
 ): BattleEvent[] {
-  return fight(host, guest, `${guestNonce}:${hostNonce}`, undefined, options);
+  return fight(host, guest, `${guestNonce}:${hostNonce}`, undefined, {
+    damageScale: SPAR_DAMAGE_SCALE,
+    maxHitShare: SPAR_MAX_HIT_SHARE,
+    ...options,
+  });
 }
 
 /**

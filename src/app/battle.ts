@@ -224,7 +224,19 @@ export const MOVE_IDS = Object.keys(MOVES) as MoveId[];
  * 引擎版本（X5 名帖的 v）：结算规则、图鉴内容变了就 +1。切磋双方在名帖里各带一份，
  * 两边不同就切不了（谁也不知道对方那版引擎会打出什么）。
  */
-export const BATTLE_VERSION = 5;
+export const BATTLE_VERSION = 6;
+
+/**
+ * 切磋节奏（X23）：切磋 / 隔空只结算 65% 伤害，把「两三手互秒」拉成有来有回的长局。
+ * 只影响切磋和隔空，历练、心魔、渡劫照旧按全额算。
+ */
+export const SPAR_DAMAGE_SCALE = 0.65;
+
+/**
+ * 切磋里单次伤害最多打掉目标最大气血的三成（X23）：暴击 / 大招式也不至于一发带走。
+ * 只封切磋和隔空，历练、心魔、渡劫不传。
+ */
+export const SPAR_MAX_HIT_SHARE = 0.3;
 
 /** 主动招式（Action 里允许出现的） */
 const ACTIVE_SKILLS: readonly SkillId[] = [
@@ -235,6 +247,18 @@ const ACTIVE_SKILLS: readonly SkillId[] = [
   'ink',
   'whale-gulp',
   'myriad-self',
+  'dream-chant',
+  'finger-sword',
+  'dragon-palm',
+  'farewell-wind',
+];
+
+/** 会造成伤害的主动招式（X23：切磋里这些必中也能被魂影替） */
+const DAMAGING_SKILLS: readonly SkillId[] = [
+  'lion-roar',
+  'blue-whale',
+  'whale-song',
+  'whale-gulp',
   'dream-chant',
   'finger-sword',
   'dragon-palm',
@@ -792,6 +816,10 @@ export const FAREWELL_SEND_CHANCE = 0.3;
 export interface FightOptions {
   /** 送友风打中、对方还活着时，按 `FAREWELL_SEND_CHANCE` 抽一签把对方送走 */
   farewell?: boolean;
+  /** 伤害整体乘这个系数（X23 切磋节奏）；不传按 1，历练 / 心魔 / 渡劫不受影响 */
+  damageScale?: number;
+  /** 单次伤害最多打掉目标最大气血的几成（X23 切磋）；不传不封顶 */
+  maxHitShare?: number;
 }
 
 export function fight(
@@ -863,6 +891,18 @@ function runFight(
 ): BattleEvent[] {
   // 结算随机数只由种子决定，是这一场内部的局部状态
   const rng = rngFrom(seed + ':resolve');
+  // 切磋节奏（X23）：所有落到气血上的伤害先过这一道；不传时原样返回，PvE 结算不变
+  const damageScale = options?.damageScale ?? 1;
+  const maxHitShare = options?.maxHitShare;
+  const sparRules = damageScale !== 1 || maxHitShare !== undefined;
+  const scaleDamage = (raw: number, target: Side): number => {
+    if (raw <= 0) return raw;
+    const scaled = Math.max(1, Math.floor(raw * damageScale));
+    if (maxHitShare === undefined || maxHitShare <= 0) return scaled;
+    return Math.min(scaled, Math.max(1, Math.floor(target.f.hp * maxHitShare)));
+  };
+  const scaledApplyDamage = (target: Side, raw: number, opts: { pierce?: boolean } = {}) =>
+    applyDamage(target, scaleDamage(raw, target), opts);
   // 送走用单独一条种子流（X16）：只在串门切磋里送友风打中时抽，不挪结算序列
   const farewellRng = options?.farewell ? rngFrom(seed + ':farewell') : null;
   const sides = [makeSide(a, 0.8 + 0.4 * rng()), makeSide(b, 0.8 + 0.4 * rng())];
@@ -953,8 +993,8 @@ function runFight(
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
-      // 万我的魂影（X9）：替本体挨这一下。必中（烟花、托盘回旋末段）和睡着时打的是本体
-      if (!sure && foe.mirror > 0) {
+      // 万我的魂影（X9）：替本体挨这一下。X23 切磋里必中也能替；PvE 必中仍打本体
+      if ((sparRules || !sure) && foe.mirror > 0) {
         foe.mirror -= 1;
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
         continue;
@@ -992,7 +1032,7 @@ function runFight(
       if (desperate !== 1) damage = Math.floor(damage * desperate);
       // 亢龙有悔的后劲（X16）：这一下打中才加，加在会心 / 背水之后
       if (surgeHere) damage += DRAGON_SURGE_BASE + Math.floor(me.f.power * DRAGON_SURGE_POWER);
-      const applied = applyDamage(foe, damage);
+      const applied = scaledApplyDamage(foe, damage);
       const kind = hit < hits ? 'hit' : 'combo';
       // 鸡毛掸子：打中（含被泡泡挡下）就笑岔气，对方下次出手往后推半个间隔
       const slowed = !!spec?.slow && foe.hp > 0;
@@ -1018,7 +1058,7 @@ function runFight(
       // 反击：远程、灵兽和反击本身不会被反击
       if (!spec?.ranged && foe.hp > 0 && foe.f.skills.includes('sixth-sense') && counterRoll < SIXTH_SENSE_CHANCE) {
         const counterDmg = randBetween(rng(), 3, 6) + Math.floor(foe.f.power * POWER_FACTOR);
-        const back = applyDamage(me, counterDmg);
+        const back = scaledApplyDamage(me, counterDmg);
         events.push({
           actor: (self ^ 1) as 0 | 1,
           kind: 'counter',
@@ -1047,7 +1087,7 @@ function runFight(
       const dodgeRoll = rng();
       const dmgRoll = rng();
       if (asleep(foe) || !(dodgeRoll < dodgeRate(foe.f))) {
-        const applied = applyDamage(foe, randBetween(dmgRoll, 4, 7));
+        const applied = scaledApplyDamage(foe, randBetween(dmgRoll, 4, 7));
         events.push({
           actor: self,
           kind: 'beast',
@@ -1102,6 +1142,12 @@ function runFight(
     } else if (action.kind === 'skill') {
       me.used.add(action.skill);
       const foe = sides[self ^ 1];
+      // X23：切磋里主动招式也能被魂影替；只挡会造成伤害的招式，buff / 回血不挡
+      if (sparRules && foe.mirror > 0 && DAMAGING_SKILLS.includes(action.skill)) {
+        foe.mirror -= 1;
+        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
+        return action;
+      }
       if (action.skill === 'bloom') {
         const heal = Math.ceil((me.f.hp * 18) / 100);
         me.hp = Math.min(me.f.hp, me.hp + heal);
@@ -1110,7 +1156,7 @@ function runFight(
       }
       if (action.skill === 'lion-roar') {
         // 狮子吼的音波也算破势的一环，伤害吃半份破势（§平衡：主动招式别比普通攻击还弱）
-        const applied = applyDamage(foe, LION_BASE + Math.floor((foe.f.hp * HP_BONUS * LION_HP_SHARE) / 1));
+        const applied = scaledApplyDamage(foe, LION_BASE + Math.floor((foe.f.hp * HP_BONUS * LION_HP_SHARE) / 1));
         const landed = foe.hp > 0 && controlLands(self, 'lion-roar');
         if (landed) control(self, 'stun');
         events.push({
@@ -1126,7 +1172,7 @@ function runFight(
       }
       if (action.skill === 'blue-whale') {
         // 约一次满额法宝攻击的 1.5–2 倍：固定伤害 + 灵力 + 整份破势
-        const applied = applyDamage(foe, 34 + me.f.power + Math.floor(foe.f.hp * HP_BONUS));
+        const applied = scaledApplyDamage(foe, 34 + me.f.power + Math.floor(foe.f.hp * HP_BONUS));
         events.push({
           actor: self,
           kind: 'skill',
@@ -1140,7 +1186,7 @@ function runFight(
       if (action.skill === 'whale-song') {
         // 鲸歌：几声低吟带着灵压，-伤害；控住就睡着，跳过下一次出手（睡着期间挨的攻击都不判闪避）。
         // X20 改成有几率以后补了一点伤害，没控住（或没哄睡）也不至于白费一整手
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           WHALE_SONG_BASE +
             Math.floor(me.f.power * POWER_FACTOR * 0.6) +
@@ -1168,7 +1214,7 @@ function runFight(
       }
       if (action.skill === 'whale-gulp') {
         // 鲸吞：伤害吃半份破势，回复实际伤害的一半（不超上限）
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           18 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * GULP_HP_SHARE),
         );
@@ -1192,7 +1238,7 @@ function runFight(
       }
       if (action.skill === 'dream-chant') {
         // 魂牵梦绕：必中伤害；控住就把对方神魂牵进梦里，下一拍动不了（入梦期间挨打不判闪避，同睡着）
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           14 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * CHANT_HP_SHARE),
         );
@@ -1212,7 +1258,7 @@ function runFight(
       if (action.skill === 'finger-sword') {
         // 五指拳心剑：拳心藏剑，剑气穿体——必中，且护体挡不住（不消耗泡泡、不打折）
         const pierced = foe.bubbles > 0;
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           22 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FIST_HP_SHARE),
           { pierce: true },
@@ -1230,7 +1276,7 @@ function runFight(
       }
       if (action.skill === 'dragon-palm') {
         // 降龙十八掌（X16）：必中；「亢龙有悔」的后劲留给下一次法宝 / 空手的第一下
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           DRAGON_PALM_BASE +
             Math.floor(me.f.power * POWER_FACTOR) +
@@ -1249,7 +1295,7 @@ function runFight(
       }
       if (action.skill === 'farewell-wind') {
         // 送友风（X16）：必中伤害；控住就飘起来跳过下一拍（飘着时挨打不判闪避）
-        const applied = applyDamage(
+        const applied = scaledApplyDamage(
           foe,
           FAREWELL_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FAREWELL_HP_SHARE),
         );

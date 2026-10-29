@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { startLiveClient, startLiveServer } from './battle-live.ts';
 import type { LiveVersus } from './battle-live.ts';
 import type { BattleEvent, Fighter } from './battle.ts';
-import { fairSparPair, rngFrom } from './battle.ts';
+import { SPAR_DAMAGE_SCALE, SPAR_MAX_HIT_SHARE, fairSparPair, rngFrom } from './battle.ts';
 import type { ShowSides } from './battle-show.ts';
 import { diaryDate } from './diary.ts';
 import type { DiaryDay } from './diary.ts';
@@ -104,6 +104,8 @@ async function fakeLiveSparHost(): Promise<{
           local: 0,
           show: silent,
           lineRng: rngFrom(`${nonce}:${HOST_NONCE}:lines`),
+          damageScale: SPAR_DAMAGE_SCALE,
+          maxHitShare: SPAR_MAX_HIT_SHARE,
           decide: async () => null,
           think: noop,
           log: noop,
@@ -164,6 +166,8 @@ async function fakeLiveDuelHost(): Promise<{
           local: 0,
           show: silent,
           lineRng: rngFrom(`${nonce}:${HOST_NONCE}:lines`),
+          damageScale: SPAR_DAMAGE_SCALE,
+          maxHitShare: SPAR_MAX_HIT_SHARE,
           decide: async () => null,
           think: noop,
           log: noop,
@@ -412,6 +416,8 @@ test('X19 隔空切磋逐手局（应战方）：自动应战打完才记账，�
         local: 1,
         show: silent,
         lineRng: rngFrom(`${ownNonce}:${reply.nonce}:lines`),
+        damageScale: SPAR_DAMAGE_SCALE,
+        maxHitShare: SPAR_MAX_HIT_SHARE,
         decide: async () => null,
         think: noop,
         log: noop,
@@ -508,6 +514,8 @@ test('X19 隔空切磋逐手局（应战方）：熟人自动应战不挂菜单�
         local: 1,
         show: silent,
         lineRng: rngFrom(`${ownNonce}:${reply.nonce}:lines`),
+        damageScale: SPAR_DAMAGE_SCALE,
+        maxHitShare: SPAR_MAX_HIT_SHARE,
         decide: async () => null,
         think: noop,
         log: noop,

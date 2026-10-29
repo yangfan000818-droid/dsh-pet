@@ -558,13 +558,13 @@ test('隔空切磋（应战方）：冒话、两个菜单项 → 点应战 → �
         assert.ok(hold < extras.requests.findIndex((request) => request.path === '/anim'), '拿锁在自家第一段动画之前');
         await until(() => arena.calls.some((code) => code.startsWith('arena.update(')), '擂台按时间线刷气血');
         await until(() => extras.menus.some((labels) => labels.includes('修炼/快进')), '打的时候换成快进');
-        // 挑战方随 reveal 带来的赛后感言上对手窗口
+        // 长局先快进，再等挑战方随 reveal 带来的赛后感言上对手窗口（X23 拉长切磋后不再 1 秒内演完）
+        clicks.push('修炼/快进');
         await until(
           () => foe.calls.some((code) => code.startsWith('guest.say(') && code.includes('承让承让')),
           '挑战方感言上了对手窗口',
-          1000,
+          3000,
         );
-        clicks.push('修炼/快进');
         await until(() => extras.requests.some((request) => request.path === '/lock/release'), '演完放锁', 400);
         await until(() => foe.destroyed && arena.destroyed && fx.destroyed, '收摊全关', 400);
       },
