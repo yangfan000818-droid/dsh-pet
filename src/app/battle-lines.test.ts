@@ -226,6 +226,97 @@ test('X16：降龙十八掌 / 送友风、后劲、飘起来、送走都有台�
   }
 });
 
+test('X21：万我大手印 / 逆流护身印 / 前有古人 / 吃苦吃亏、反弹、古人、三种吃法、封法宝都有台词，不超过 40 字', () => {
+  // 名字按 12 字上限来验长度
+  const names: [string, string] = ['小花小花小花小花', '心魔心魔心魔心魔'];
+  const cases: Array<[BattleEvent, (line: string) => boolean]> = [
+    [
+      { actor: 0, kind: 'skill', skill: 'myriad-palm', damage: 30, hp: [10, 4] },
+      (l) => l.includes('30') && /大手印|巨掌/.test(l),
+    ],
+    [
+      { actor: 0, kind: 'skill', skill: 'myriad-palm', damage: 30, sealed: 'weapon', hp: [10, 4] },
+      (l) => l.includes('30') && /法宝/.test(l),
+    ],
+    [
+      { actor: 0, kind: 'skill', skill: 'reverse-seal', hp: [10, 10] },
+      (l) => l.includes(names[0]) && /逆流|白袍|水雾/.test(l),
+    ],
+    [{ actor: 0, kind: 'skill', skill: 'ancients', hp: [10, 10] }, (l) => /古人|光阴/.test(l)],
+    [{ actor: 0, kind: 'skill', skill: 'eat-hardship', hp: [10, 10] }, (l) => /吃|亏/.test(l)],
+    [{ actor: 1, kind: 'reverse', damage: 21, hp: [7, 10] }, (l) => l.includes('21') && /打回|自食/.test(l)],
+    [{ actor: 0, kind: 'ancient', damage: 80, hp: [10, 2] }, (l) => l.includes('80') && /古人/.test(l)],
+    [{ actor: 0, kind: 'devour', what: 'bubble', heal: 17, hp: [10, 10] }, (l) => l.includes('17') && /泡泡/.test(l)],
+    [{ actor: 0, kind: 'devour', what: 'mirror', heal: 13, hp: [10, 10] }, (l) => l.includes('13') && /魂影/.test(l)],
+    [
+      { actor: 0, kind: 'devour', what: 'bite', damage: 44, heal: 22, hp: [10, 4] },
+      (l) => l.includes('44') && l.includes('22'),
+    ],
+  ];
+  for (const [event, check] of cases) {
+    const seen = new Set<string>();
+    for (const roll of [0.01, 0.5, 0.99]) {
+      const line = lineOf(event, names, () => roll);
+      assert.ok(line !== null, `${event.kind} 应该有台词`);
+      assert.ok(check(line!), `${event.kind} 台词内容不对：${line}`);
+      assert.ok(line!.length <= 40, `${event.kind} 台词超长：${line}`);
+      seen.add(line!);
+    }
+    assert.ok(seen.size >= 2, `${event.kind} 至少两句`);
+  }
+});
+
+test('X22：鬼手 / 无头鬼影 / 鬼敲门 / 鬼画 / 鬼血、封招式、取首级、封被动、敲门反噬都有台词，不超过 40 字', () => {
+  const names: [string, string] = ['小花小花小花小花', '心魔心魔心魔心魔'];
+  const cases: Array<[BattleEvent, (line: string) => boolean]> = [
+    [
+      { actor: 0, kind: 'skill', skill: 'ghost-hand', damage: 26, hp: [10, 4] },
+      (l) => l.includes('26') && /鬼手|掐/.test(l),
+    ],
+    [
+      { actor: 0, kind: 'skill', skill: 'ghost-hand', damage: 26, sealed: 'skill', hp: [10, 4] },
+      (l) => l.includes('26') && /招式/.test(l),
+    ],
+    [
+      { actor: 0, kind: 'skill', skill: 'headless-shadow', damage: 40, hp: [10, 4] },
+      (l) => l.includes('40') && /鬼影|影子/.test(l),
+    ],
+    [
+      { actor: 0, kind: 'skill', skill: 'headless-shadow', damage: 40, behead: true, hp: [10, 0] },
+      (l) => l.includes('40') && /头颅|没了头/.test(l),
+    ],
+    [{ actor: 0, kind: 'skill', skill: 'ghost-knock', hp: [10, 10] }, (l) => /敲|门/.test(l)],
+    [{ actor: 0, kind: 'skill', skill: 'ghost-painting', paint: 'bubble', hp: [10, 10] }, (l) => /符|画|封/.test(l)],
+    [{ actor: 0, kind: 'skill', skill: 'ghost-painting', damage: 20, hp: [10, 10] }, (l) => /符|画/.test(l)],
+    [
+      { actor: 0, kind: 'skill', skill: 'ghost-blood', damage: 30, hp: [10, 4] },
+      (l) => l.includes('30') && /血珠|暗红/.test(l),
+    ],
+    [{ actor: 1, kind: 'knock', damage: 26, hp: [4, 10] }, (l) => l.includes('26') && /敲门|门响/.test(l)],
+  ];
+  for (const [event, check] of cases) {
+    const seen = new Set<string>();
+    for (const roll of [0.01, 0.5, 0.99]) {
+      const line = lineOf(event, names, () => roll);
+      assert.ok(line !== null, `${event.kind} 应该有台词`);
+      assert.ok(check(line!), `${event.kind} 台词内容不对：${line}`);
+      assert.ok(line!.length <= 40, `${event.kind} 台词超长：${line}`);
+      seen.add(line!);
+    }
+    assert.ok(seen.size >= 2, `${event.kind} 至少两句`);
+  }
+  // 鬼眼是被动：化鸽遁之外，带鬼眼的一方闪避时说「看穿了」
+  const ghostEyeSeen = new Set<string>();
+  for (const roll of [0.01, 0.5, 0.99]) {
+    ghostEyeSeen.add(lineOf({ actor: 0, kind: 'dodge', hp: [10, 10] }, names, () => roll, [['ghost-eye'], []])!);
+  }
+  assert.ok(
+    [...ghostEyeSeen].every((l) => /鬼眼|幽光/.test(l)),
+    `鬼眼闪避句不对：${[...ghostEyeSeen]}`,
+  );
+  assert.ok(ghostEyeSeen.size >= 2, '鬼眼闪避至少两句');
+});
+
 test('X11：名字以「的」结尾时，所有 {a}的 / {b}的 模板都不重复「的」', () => {
   const deNames: [string, string] = ['吃白饭的', '吃白饭的'];
   const hp: [number, number] = [10, 10];
@@ -266,6 +357,18 @@ test('X11：名字以「的」结尾时，所有 {a}的 / {b}的 模板都不重
       hp,
     })),
     { actor: 0, kind: 'skill', skill: 'finger-sword', damage: 9, pierce: true, hp },
+    // X21：封法宝、反弹、古人、三种吃法
+    { actor: 0, kind: 'skill', skill: 'myriad-palm', damage: 9, sealed: 'weapon', hp },
+    { actor: 0, kind: 'reverse', damage: 9, hp },
+    { actor: 0, kind: 'ancient', damage: 9, hp },
+    { actor: 0, kind: 'devour', what: 'bubble', heal: 3, hp },
+    { actor: 0, kind: 'devour', what: 'mirror', heal: 3, hp },
+    { actor: 0, kind: 'devour', what: 'bite', damage: 9, heal: 3, hp },
+    // X22：封招式、取首级、封被动、敲门反噬
+    { actor: 0, kind: 'skill', skill: 'ghost-hand', damage: 9, sealed: 'skill', hp },
+    { actor: 0, kind: 'skill', skill: 'headless-shadow', damage: 9, behead: true, hp },
+    { actor: 0, kind: 'skill', skill: 'ghost-painting', paint: 'bubble', hp },
+    { actor: 0, kind: 'knock', damage: 9, hp },
     { actor: 0, kind: 'strike', index: 0, damage: 9, blocked: false, hp },
     { actor: 0, kind: 'end', winner: 0, reason: 'ko', hp },
     { actor: 0, kind: 'end', winner: 0, reason: 'farewell', hp },

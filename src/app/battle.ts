@@ -112,7 +112,17 @@ export type SkillId =
   | 'dream-chant'
   | 'finger-sword'
   | 'dragon-palm'
-  | 'farewell-wind';
+  | 'farewell-wind'
+  | 'myriad-palm'
+  | 'reverse-seal'
+  | 'ancients'
+  | 'eat-hardship'
+  | 'ghost-eye'
+  | 'ghost-hand'
+  | 'headless-shadow'
+  | 'ghost-knock'
+  | 'ghost-painting'
+  | 'ghost-blood';
 
 export interface SkillDef {
   id: SkillId;
@@ -147,6 +157,16 @@ export const SKILLS: Record<SkillId, SkillDef> = {
   'finger-sword': skill('finger-sword', '五指拳心剑', '主动'),
   'dragon-palm': skill('dragon-palm', '降龙十八掌', '主动'),
   'farewell-wind': skill('farewell-wind', '送友风', '主动'),
+  'myriad-palm': skill('myriad-palm', '万我大手印', '主动'),
+  'reverse-seal': skill('reverse-seal', '逆流护身印', '主动'),
+  ancients: skill('ancients', '前有古人', '主动'),
+  'eat-hardship': skill('eat-hardship', '吃苦吃亏', '主动'),
+  'ghost-eye': skill('ghost-eye', '鬼眼', '被动'),
+  'ghost-hand': skill('ghost-hand', '鬼手', '主动'),
+  'headless-shadow': skill('headless-shadow', '无头鬼影', '主动'),
+  'ghost-knock': skill('ghost-knock', '鬼敲门', '主动'),
+  'ghost-painting': skill('ghost-painting', '鬼画', '主动'),
+  'ghost-blood': skill('ghost-blood', '鬼血', '主动'),
 };
 
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
@@ -224,7 +244,7 @@ export const MOVE_IDS = Object.keys(MOVES) as MoveId[];
  * 引擎版本（X5 名帖的 v）：结算规则、图鉴内容变了就 +1。切磋双方在名帖里各带一份，
  * 两边不同就切不了（谁也不知道对方那版引擎会打出什么）。
  */
-export const BATTLE_VERSION = 6;
+export const BATTLE_VERSION = 7;
 
 /**
  * 切磋节奏（X23）：切磋 / 隔空只结算 65% 伤害，把「两三手互秒」拉成有来有回的长局。
@@ -251,18 +271,16 @@ const ACTIVE_SKILLS: readonly SkillId[] = [
   'finger-sword',
   'dragon-palm',
   'farewell-wind',
-];
-
-/** 会造成伤害的主动招式（X23：切磋里这些必中也能被魂影替） */
-const DAMAGING_SKILLS: readonly SkillId[] = [
-  'lion-roar',
-  'blue-whale',
-  'whale-song',
-  'whale-gulp',
-  'dream-chant',
-  'finger-sword',
-  'dragon-palm',
-  'farewell-wind',
+  'myriad-palm',
+  'reverse-seal',
+  'ancients',
+  'eat-hardship',
+  // 鬼眼（X22）是被动，不进这张表
+  'ghost-hand',
+  'headless-shadow',
+  'ghost-knock',
+  'ghost-painting',
+  'ghost-blood',
 ];
 
 export interface Fighter {
@@ -301,12 +319,15 @@ export interface BattleView {
     weapons: WeaponId[];
     skills: SkillId[];
     /** 这场已经用过的招式（主动的一次性、被动见次数说明） */ used: SkillId[];
+    /** 这一手不能用法宝 / 主动招式（X21 万我大手印封法宝；X22 鬼手封招式） */
+    sealed?: 'weapon' | 'skill';
     /** 身上的招式（一转蛊 / 对手招式）；不带招式的一方给空数组（Y0） */
     moves?: MoveId[];
     /** 这场用掉的带次数限制的招，每次使用追加一个编号（Y0） */
     moveUses?: MoveId[];
   };
-  foe: { weapons: WeaponId[]; skills: SkillId[]; moves?: MoveId[] };
+  /** `bubbles` / `mirror`（X21）：对方还剩几层泡泡护体、几重魂影，吃苦吃亏拿这个挑吃法 */
+  foe: { weapons: WeaponId[]; skills: SkillId[]; moves?: MoveId[]; bubbles?: number; mirror?: number };
 }
 
 export interface Controller {
@@ -394,6 +415,27 @@ export type BattleEvent =
       pierce?: true;
       /** 控制没压住（X20 平衡）：狮子吼 / 鲸歌 / 魂牵梦绕 / 送友风被对方扛住了，这一拍没有跳过 */
       resisted?: true;
+      /** 这一下把对方的下一次出手封了（X21 万我大手印封法宝；X22 鬼手封招式） */
+      sealed?: 'weapon' | 'skill';
+      /** 无头鬼影这一下取了首级（X22）：致命时假死遁救不回来 */
+      behead?: true;
+      /** 鬼画封掉的被动（X22）：本场失效 */
+      paint?: SkillId;
+      hp: [number, number];
+    }
+  /** 鬼敲门（X22）：actor 是被敲门的一方，下一次真正出手前先挨这一下 */
+  | { actor: 0 | 1; kind: 'knock'; damage: number; hp: [number, number] }
+  /** 逆流护身印弹回去（X21）：actor 是护身的一方，damage 是弹回去的数 */
+  | { actor: 0 | 1; kind: 'reverse'; damage: number; hp: [number, number] }
+  /** 前有古人补的那一击（X21）：actor 是召唤方 */
+  | { actor: 0 | 1; kind: 'ancient'; damage: number; hp: [number, number] }
+  /** 吃苦吃亏吃掉的东西（X21）：what 是泡泡 / 魂影 / 咬一口 */
+  | {
+      actor: 0 | 1;
+      kind: 'devour';
+      what: 'bubble' | 'mirror' | 'bite';
+      damage?: number;
+      heal?: number;
       hp: [number, number];
     }
   | { actor: 0 | 1; kind: 'strike'; index: number; damage: number; blocked: boolean; hp: [number, number] }
@@ -438,9 +480,18 @@ function pick<T>(rng: () => number, items: readonly T[]): T {
   return items[Math.floor(rng() * items.length)];
 }
 
+/**
+ * 被动是否还生效（X22 鬼画）：招式在身，且没被本场封掉（`sealedPassive`）。
+ * 所有被动判定都走这里；`sealedPassive` 为空时逐条等价于原来的 `f.skills.includes(id)`。
+ */
+function hasSkill(side: { f: Fighter; sealedPassive: SkillId | null }, id: SkillId): boolean {
+  return side.f.skills.includes(id) && side.sealedPassive !== id;
+}
+
 /** 闪避率 = min(35%, 身法 × 1.5% + 化鸽遁 8% + 加持的闪避加成（Y0，上限照旧）) */
-function dodgeRate(f: Fighter): number {
-  return Math.min(0.35, f.agility * 0.015 + (f.skills.includes('dove') ? 0.08 : 0) + (f.mods?.dodge ?? 0));
+function dodgeRate(side: Side): number {
+  const f = side.f;
+  return Math.min(0.35, f.agility * 0.015 + (hasSkill(side, 'dove') ? 0.08 : 0) + (f.mods?.dodge ?? 0));
 }
 
 /** 背水一战（Y0）：气血低于三成的伤害倍率，不带 mods 的一方恒为 1（不改变原来的结算） */
@@ -524,10 +575,20 @@ interface Side {
   guardLeft: number;
   /** 降龙十八掌的后劲还挂着（X16）：下一次法宝 / 空手出手的第一下打中时加伤，打空就作废 */
   surge: boolean;
+  /** 逆流护身印：接下来还有几次挨到的伤害按比例弹回攻击方（X21） */
+  reversal: number;
+  /** 下一次出手不能用法宝 / 主动招式（X21 万我大手印封法宝；X22 鬼手封招式） */
+  sealed: 'weapon' | 'skill' | null;
+  /** 被鬼画封掉的被动招式（X22）：本场失效，一次只封一门 */
+  sealedPassive: SkillId | null;
+  /** 被鬼敲门挂了记号（X22）：下一次真正出手前先挨一下，被控跳过不算出手 */
+  knock: boolean;
+  /** 前有古人还挂着（X21）：下一次真正出手时古人先补一击 */
+  ancient: boolean;
 }
 
 function makeSide(f: Fighter, initialDelay: number): Side {
-  return {
+  const side: Side = {
     f,
     hp: startingHp(f),
     next: (100 / (f.speed + 10)) * initialDelay,
@@ -537,12 +598,21 @@ function makeSide(f: Fighter, initialDelay: number): Side {
     blind: 0,
     mirror: 0,
     used: new Set(),
-    bubbles: f.skills.includes('bubble') ? 2 : 0,
-    beastLeft: f.skills.includes('spirit-beast') ? 3 : 0,
+    bubbles: 0,
+    beastLeft: 0,
     moveUses: new Map(),
     guardLeft: f.guard ? f.guard.times : 0,
     surge: false,
+    reversal: 0,
+    sealed: null,
+    sealedPassive: null,
+    knock: false,
+    ancient: false,
   };
+  // 泡泡 / 灵兽的初始次数也走 hasSkill（X22）：以后开局就被封的情况不用另写一份判定
+  side.bubbles = hasSkill(side, 'bubble') ? 2 : 0;
+  side.beastLeft = hasSkill(side, 'spirit-beast') ? 3 : 0;
+  return side;
 }
 
 function intervalOf(s: Side): number {
@@ -556,21 +626,28 @@ function hpPair(a: Side, b: Side): [number, number] {
 /**
  * 结算一次伤害：泡泡护体挡一半（向下取整），致命一击被假死遁救下时留 1 点（一场一次）。
  * `pierce`（X9 的五指拳心剑）：穿护体——不消耗泡泡、也不打折。
+ * `noPlayDead`（X22 无头鬼影）：这一下打死了就真死了，假死遁也救不回来。
  */
 function applyDamage(
   target: Side,
   raw: number,
-  opts: { pierce?: boolean } = {},
+  opts: { pierce?: boolean; noPlayDead?: boolean } = {},
 ): { damage: number; blocked: boolean; playDead: boolean } {
   let damage = raw;
-  const blocked = !opts.pierce && target.bubbles > 0;
+  const blocked = !opts.pierce && hasSkill(target, 'bubble') && target.bubbles > 0;
   if (blocked) {
     target.bubbles -= 1;
     damage = Math.floor(damage * BUBBLE_FACTOR);
   }
   const before = target.hp;
   target.hp = Math.max(0, target.hp - damage);
-  if (target.hp === 0 && before > 0 && target.f.skills.includes('play-dead') && !target.used.has('play-dead')) {
+  if (
+    target.hp === 0 &&
+    before > 0 &&
+    !opts.noPlayDead &&
+    hasSkill(target, 'play-dead') &&
+    !target.used.has('play-dead')
+  ) {
     target.hp = 1;
     target.used.add('play-dead');
     // 装死要躺一拍才爬起来（X20 平衡）：不然这一场凭空多一整手，持有方胜率一直顶在 0.65
@@ -655,6 +732,20 @@ export function autoController(rng: () => number): Controller {
       const foeMax = view.maxHp[foeSide];
       const unused = view.you.skills.filter((s) => ACTIVE_SKILLS.includes(s) && !view.you.used.includes(s));
       if (unused.includes('bloom') && hp * 2 < maxHp) return { kind: 'skill', skill: 'bloom' };
+      // 吃苦吃亏（X21）：对方身上还有泡泡 / 魂影时先吃掉
+      if (unused.includes('eat-hardship') && (view.foe.bubbles ?? 0) + (view.foe.mirror ?? 0) > 0)
+        return { kind: 'skill', skill: 'eat-hardship' };
+      // 逆流护身印（X21）：气血低于一半先撑起反弹
+      if (unused.includes('reverse-seal') && hp * 2 < maxHp) return { kind: 'skill', skill: 'reverse-seal' };
+      // 万我大手印（X21）：对方法宝多于两件时先把法宝攥住
+      if (unused.includes('myriad-palm') && view.foe.weapons.length > 2) return { kind: 'skill', skill: 'myriad-palm' };
+      // X22：对方被动数决定鬼血 / 鬼画，残血取首级，满血先敲门
+      const foePassives = view.foe.skills.filter((s) => SKILLS[s].kind === '被动').length;
+      if (unused.includes('ghost-blood') && foePassives >= 4) return { kind: 'skill', skill: 'ghost-blood' };
+      if (unused.includes('ghost-painting') && foePassives >= 3) return { kind: 'skill', skill: 'ghost-painting' };
+      if (unused.includes('headless-shadow') && foeHp * 10 < foeMax * 4)
+        return { kind: 'skill', skill: 'headless-shadow' };
+      if (unused.includes('ghost-knock') && foeHp * 10 > foeMax * 7) return { kind: 'skill', skill: 'ghost-knock' };
       // 鲸吞带回血：气血低于七成时先用
       if (unused.includes('whale-gulp') && hp * 10 < maxHp * 7) return { kind: 'skill', skill: 'whale-gulp' };
       // 五指拳心剑收人头（X9）：对方剩不到三成半就捅
@@ -702,10 +793,14 @@ export const MAX_ACTIONS = 30;
  * AI 和手动点招、X19 收到的对方出手都先过这里；不合法就当没选。
  */
 export function legalActions(view: BattleView): Action[] {
-  const actions: Action[] = view.you.weapons.map((weapon): Action => ({ kind: 'weapon', weapon }));
+  // 封法宝 / 封招式（X21）：这一手不列被封的那一类，只剩空手和另一边
+  const actions: Action[] =
+    view.you.sealed === 'weapon' ? [] : view.you.weapons.map((weapon): Action => ({ kind: 'weapon', weapon }));
   actions.push({ kind: 'unarmed' });
-  for (const skill of view.you.skills) {
-    if (ACTIVE_SKILLS.includes(skill) && !view.you.used.includes(skill)) actions.push({ kind: 'skill', skill });
+  if (view.you.sealed !== 'skill') {
+    for (const skill of view.you.skills) {
+      if (ACTIVE_SKILLS.includes(skill) && !view.you.used.includes(skill)) actions.push({ kind: 'skill', skill });
+    }
   }
   const used = view.you.moveUses ?? [];
   for (const move of view.you.moves ?? []) {
@@ -736,11 +831,14 @@ const POWER_FACTOR = 0.75;
  * X16 招式表再扩到 19 门（降龙十八掌、送友风）：后期攒到防身招式的概率又被摊薄，不吃丹掉到 0.52–0.66；
  * 重扫七个分界后把炼虚往上的附加斜率改成 -0.0065（仍是随境界涨，只是涨得慢一些），
  * 现值为 0.47 / 0.0198 / -0.0065 / 0.368，七站不吃丹 0.55–0.71、吃丹 0.86–0.90。
+ * X22 招式表 23 → 29（五门主动 + 鬼眼被动）：攒到泡泡 / 化鸽 / 假死 / 生花的概率继续摊薄，
+ * stage 20 不吃丹掉到 0.543（下限 0.55）；炼虚往上的附加斜率再放到 -0.0112，
+ * 现值为 0.47 / 0.0198 / -0.0112 / 0.368，七站不吃丹 0.553–0.668、吃丹 0.863–0.902。
  */
 const TRIBULATION_BASE = 0.47;
 const TRIBULATION_STEP = 0.0198;
-/** 炼虚往上的附加斜率（X16 起为负）：技能攒得全，单道雷随境界涨得慢一些 */
-const TRIBULATION_LATE_STEP = -0.0065;
+/** 炼虚往上的附加斜率（X16 起为负，X22 再放到 -0.0112）：技能攒得全，单道雷随境界涨得慢一些 */
+const TRIBULATION_LATE_STEP = -0.0112;
 /** 渡劫：单道雷按渡劫者自身气血加成的比例（吃丹加的血也走这里，丹的收益不至于陡成必过） */
 const TRIBULATION_HP_CUT = 0.368;
 /** 破势：伤害里随防守方气血上限加成的比例 */
@@ -813,6 +911,49 @@ const FAREWELL_HP_SHARE = 0.4;
  * 超过 0.65 就往下调（数值记在 X16 的落地情况里）。
  */
 export const FAREWELL_SEND_CHANCE = 0.3;
+
+/**
+ * 万我大手印（X21）：必中伤害的基数和吃的破势份额
+ */
+const PALM_BASE = 26;
+const PALM_HP_SHARE = 0.5;
+/**
+ * 逆流护身印（X21）：弹几次、每次弹回原伤害的几成。
+ * 起点 2 次一轮实测 0.77（上限 0.61），照任务书先降到 1 次，落到 0.52。
+ */
+const REVERSAL_TIMES = 1;
+const REVERSAL_SHARE = 0.7;
+/**
+ * 前有古人（X21）：古人补的那一击（必中）。任务书写 22，但这一步本身不造成伤害，
+ * 白搭一手只补 22 实测只有 0.34（下限 0.44）——引擎每一次出手都在 40 上下，补一击要抵得上一手才不亏，调到 80 后 0.48。
+ */
+const ANCIENT_BASE = 80;
+/**
+ * 吃苦吃亏（X21）：吃掉泡泡 / 魂影时各回多少上限血；都没得吃就咬一口的基数。
+ * 任务书写 14，实测 0.36（下限 0.44）；咬一口也得贴近一手普通攻击，调到 40 后 0.48。
+ */
+const EAT_HEAL = 0.15;
+const EAT_MIRROR_HEAL = 0.12;
+const EAT_BITE_BASE = 40;
+
+/**
+ * 鬼手 / 无头鬼影 / 鬼敲门 / 鬼画 / 鬼血（X22）：伤害基数与份额。起点照任务书 §X22；
+ * 但 8000 场持有优势里鬼手 0.43、鬼敲门 0.29、鬼画 0.34、鬼血 0.35（下限 0.44）——
+ * 施放本身不造成伤害或伤害太轻，按 X21 的口径把基数提到抵得上一手普通攻击：
+ * 鬼手 20→38、鬼敲门 20→60（破势 0.3→0.5）、鬼画 16→77（灵力 0.4→0.75）、鬼血 14→50（灵力 0.5→0.75）。
+ * 调后六门 0.454–0.510，泡泡护体 0.600（上限 0.61）。
+ */
+const HAND_BASE = 38;
+const HAND_HP_SHARE = 0.4;
+const SHADOW_BASE = 30;
+const SHADOW_HP_SHARE = 0.4;
+const KNOCK_BASE = 60;
+const KNOCK_HP_SHARE = 0.5;
+const PAINT_BASE = 77;
+const PAINT_POWER = 0.75;
+const BLOOD_BASE = 50;
+const BLOOD_POWER = 0.75;
+const BLOOD_PER_PASSIVE = 4;
 
 /** 一场对战的额外开关（X16）：`farewell` 只在串门切磋里传，隔空 / 心魔 / 秘境 / 渡劫都不传 */
 export interface FightOptions {
@@ -896,15 +1037,14 @@ function runFight(
   // 切磋节奏（X23）：所有落到气血上的伤害先过这一道；不传时原样返回，PvE 结算不变
   const damageScale = options?.damageScale ?? 1;
   const maxHitShare = options?.maxHitShare;
-  const sparRules = damageScale !== 1 || maxHitShare !== undefined;
-  const scaleDamage = (raw: number, target: Side): number => {
+  // X23 的切磋规则（伤害缩放 / 封顶）只在这类局里生效；PvE 的旧快照和平衡不受影响
+  const sparRules = (options?.damageScale ?? 1) !== 1 || maxHitShare !== undefined;
+  const scaleDamage = (raw: number, target: { f: Fighter }): number => {
     if (raw <= 0) return raw;
     const scaled = Math.max(1, Math.floor(raw * damageScale));
     if (maxHitShare === undefined || maxHitShare <= 0) return scaled;
     return Math.min(scaled, Math.max(1, Math.floor(target.f.hp * maxHitShare)));
   };
-  const scaledApplyDamage = (target: Side, raw: number, opts: { pierce?: boolean } = {}) =>
-    applyDamage(target, scaleDamage(raw, target), opts);
   // 送走用单独一条种子流（X16）：只在串门切磋里送友风打中时抽，不挪结算序列
   const farewellRng = options?.farewell ? rngFrom(seed + ':farewell') : null;
   const sides = [makeSide(a, 0.8 + 0.4 * rng()), makeSide(b, 0.8 + 0.4 * rng())];
@@ -921,6 +1061,7 @@ function runFight(
         weapons: me.f.weapons,
         skills: me.f.skills,
         used: [...me.used],
+        ...(me.sealed ? { sealed: me.sealed } : {}),
         ...(me.f.moves ? { moves: me.f.moves } : {}),
         ...(me.moveUses.size > 0
           ? {
@@ -928,7 +1069,13 @@ function runFight(
             }
           : {}),
       },
-      foe: { weapons: foe.f.weapons, skills: foe.f.skills, ...(foe.f.moves ? { moves: foe.f.moves } : {}) },
+      foe: {
+        weapons: foe.f.weapons,
+        skills: foe.f.skills,
+        bubbles: foe.bubbles,
+        mirror: foe.mirror,
+        ...(foe.f.moves ? { moves: foe.f.moves } : {}),
+      },
     };
   };
 
@@ -954,6 +1101,43 @@ function runFight(
     foe.skip = true;
     foe.skipCause = cause;
     foe.controlled = true;
+  };
+
+  /**
+   * 伤害入口（X21）：先看挨打方身上还有没有逆流护身印，有就按比例弹回攻击方，再走 `applyDamage`。
+   * 只接主动出手的伤害（法宝、空手、主动招式、招式表招式）；反击、灵兽、渡劫天雷直接走 `applyDamage`。
+   * 弹回去的那一下不再判闪避 / 魂影 / 分身 / 替挡 / 反击，也不触发攻击方的护身印（只反一层，防套娃）。
+   * 普通攻击的魂影在 `attack` 里先挡；必中 / 主动招式绕过那一步，到这里再被魂影替掉（X23 反制必中）。
+   * 护体 / 假死照常由 `applyDamage` 处理。返回的 `reversed` / `mirrored` 表示这一下没打到本体。
+   */
+  const dealDamage = (
+    self: 0 | 1,
+    raw: number,
+    opts: { pierce?: boolean; noPlayDead?: boolean } = {},
+  ): { damage: number; blocked: boolean; playDead: boolean; reversed: boolean; mirrored: boolean } => {
+    const me = sides[self];
+    const foe = sides[self ^ 1];
+    if (foe.reversal > 0 && raw > 0) {
+      foe.reversal -= 1;
+      const back = applyDamage(me, scaleDamage(Math.floor(raw * REVERSAL_SHARE), me));
+      events.push({
+        actor: (self ^ 1) as 0 | 1,
+        kind: 'reverse',
+        damage: back.damage,
+        hp: hpPair(sides[0], sides[1]),
+      });
+      if (back.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      return { damage: 0, blocked: false, playDead: false, reversed: true, mirrored: false };
+    }
+    // 必中 / 主动招式也能被魂影替（X23）：普通攻击在 attack 里已经先挡过，不会走到这里重复消耗。
+    // 鬼眼（X22）看穿幻象：它打出去的攻击，对方的魂影替不了
+    if (sparRules && foe.mirror > 0 && raw > 0 && !hasSkill(me, 'ghost-eye')) {
+      foe.mirror -= 1;
+      events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
+      return { damage: 0, blocked: false, playDead: false, reversed: false, mirrored: true };
+    }
+    const applied = applyDamage(foe, scaleDamage(raw, foe), opts);
+    return { ...applied, reversed: false, mirrored: false };
   };
 
   /**
@@ -991,18 +1175,19 @@ function runFight(
       }
       // 必中：烟花；银托盘最后一段从背后回旋磕过来；对方睡着 / 入梦
       const sure = spec?.mustHit || (spec?.returnSure && hit === hits - 1) || asleep(foe);
-      if (!sure && dodgeRoll < dodgeRate(foe.f)) {
+      if (!sure && dodgeRoll < dodgeRate(foe)) {
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
-      // 万我的魂影（X9）：替本体挨这一下。X23 切磋里必中也能替；PvE 必中仍打本体
-      if ((sparRules || !sure) && foe.mirror > 0) {
+      // 万我的魂影（X9）：替本体挨这一下。必中（烟花、托盘回旋末段）和睡着时打的是本体。
+      // 鬼眼（X22）看穿幻象：它打出去的攻击，魂影替不了
+      if (!sure && foe.mirror > 0 && !hasSkill(me, 'ghost-eye')) {
         foe.mirror -= 1;
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
-      // 水母分身：counterRoll 的高段（反击用低段；分身作废后本来就不判反击）
-      if (foe.f.skills.includes('jelly-clone') && counterRoll >= DECOY_FROM) {
+      // 水母分身：counterRoll 的高段（反击用低段；分身作废后本来就不判反击）。鬼眼看穿分身（X22）
+      if (hasSkill(foe, 'jelly-clone') && !hasSkill(me, 'ghost-eye') && counterRoll >= DECOY_FROM) {
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'decoy', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
@@ -1026,7 +1211,7 @@ function runFight(
       const perPiece = Math.floor((me.f.power * POWER_FACTOR + foe.f.hp * HP_BONUS) / (spec?.hits ?? 1));
       let damage = base + perPiece;
       // 会心：人人有个基础会心率，会心一击把它提到 10%（§平衡：加方差，免得境界高一线就稳赢）
-      const critChance = me.f.skills.includes('critical') ? CRIT_SKILL_CHANCE : BASE_CRIT;
+      const critChance = hasSkill(me, 'critical') ? CRIT_SKILL_CHANCE : BASE_CRIT;
       const crit = critRoll < critChance;
       if (crit) damage *= 2;
       // 背水一战（Y0）：自己气血低于三成时这一段伤害翻倍率（不带 mods 时 ×1，结算不变）
@@ -1034,10 +1219,10 @@ function runFight(
       if (desperate !== 1) damage = Math.floor(damage * desperate);
       // 亢龙有悔的后劲（X16）：这一下打中才加，加在会心 / 背水之后
       if (surgeHere) damage += DRAGON_SURGE_BASE + Math.floor(me.f.power * DRAGON_SURGE_POWER);
-      const applied = scaledApplyDamage(foe, damage);
+      const applied = dealDamage(self, damage);
       const kind = hit < hits ? 'hit' : 'combo';
-      // 鸡毛掸子：打中（含被泡泡挡下）就笑岔气，对方下次出手往后推半个间隔
-      const slowed = !!spec?.slow && foe.hp > 0;
+      // 鸡毛掸子：打中（含被泡泡挡下）就笑岔气，对方下次出手往后推半个间隔；被护身印弹回就不算打中
+      const slowed = !!spec?.slow && foe.hp > 0 && !applied.reversed && !applied.mirrored;
       if (slowed) foe.next += intervalOf(foe) * SLOW_FACTOR;
       events.push({
         actor: self,
@@ -1053,14 +1238,28 @@ function runFight(
       });
       if (applied.playDead)
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
-      // 定身（陀螺是晕，雪球是冻住）：刚被控过、还没出手的不再吃控（X20，防连控成锁）
-      if (spec && spec.skipChance > 0 && !foe.controlled && skipRoll < spec.skipChance) {
+      // 定身（陀螺是晕，雪球是冻住）：刚被控过、还没出手的不再吃控（X20，防连控成锁）；被弹回不算打中
+      if (
+        spec &&
+        spec.skipChance > 0 &&
+        !applied.reversed &&
+        !applied.mirrored &&
+        !foe.controlled &&
+        skipRoll < spec.skipChance
+      ) {
         control(self, spec.skipCause);
       }
-      // 反击：远程、灵兽和反击本身不会被反击
-      if (!spec?.ranged && foe.hp > 0 && foe.f.skills.includes('sixth-sense') && counterRoll < SIXTH_SENSE_CHANCE) {
+      // 反击：远程、灵兽和反击本身不会被反击；被护身印弹回的这一下也没打到人，不招反击
+      if (
+        !applied.reversed &&
+        !applied.mirrored &&
+        !spec?.ranged &&
+        foe.hp > 0 &&
+        hasSkill(foe, 'sixth-sense') &&
+        counterRoll < SIXTH_SENSE_CHANCE
+      ) {
         const counterDmg = randBetween(rng(), 3, 6) + Math.floor(foe.f.power * POWER_FACTOR);
-        const back = scaledApplyDamage(me, counterDmg);
+        const back = applyDamage(me, scaleDamage(counterDmg, me));
         events.push({
           actor: (self ^ 1) as 0 | 1,
           kind: 'counter',
@@ -1076,9 +1275,7 @@ function runFight(
         combos < comboCap &&
         hit + 1 >= hits &&
         comboRoll <
-          Math.min(0.3, me.f.agility * 0.01) +
-            (spec?.comboBonus ?? 0) +
-            (me.f.skills.includes('shadow-fists') ? 0.15 : 0)
+          Math.min(0.3, me.f.agility * 0.01) + (spec?.comboBonus ?? 0) + (hasSkill(me, 'shadow-fists') ? 0.15 : 0)
       ) {
         combos += 1;
       }
@@ -1088,8 +1285,8 @@ function runFight(
       me.beastLeft -= 1;
       const dodgeRoll = rng();
       const dmgRoll = rng();
-      if (asleep(foe) || !(dodgeRoll < dodgeRate(foe.f))) {
-        const applied = scaledApplyDamage(foe, randBetween(dmgRoll, 4, 7));
+      if (asleep(foe) || !(dodgeRoll < dodgeRate(foe))) {
+        const applied = applyDamage(foe, scaleDamage(randBetween(dmgRoll, 4, 7), foe));
         events.push({
           actor: self,
           kind: 'beast',
@@ -1105,8 +1302,10 @@ function runFight(
     }
   };
 
-  /** 出招者交代的动作不合法（没有的法宝 / 招式、用过的主动招式）时按空手处理 */
-  const legalize = (me: Side, action: Action): Action => {
+  /** 出招者交代的动作不合法（没有的法宝 / 招式、用过的主动招式、被封的那一类）时按空手处理 */
+  const legalize = (me: Side, action: Action, sealed: Side['sealed']): Action => {
+    if (sealed === 'weapon' && action.kind === 'weapon') return { kind: 'unarmed' };
+    if (sealed === 'skill' && action.kind === 'skill') return { kind: 'unarmed' };
     if (action.kind === 'weapon' && me.f.weapons.includes(action.weapon)) return action;
     if (action.kind === 'move' && me.f.moves?.includes(action.move)) {
       const cap = MOVES[action.move].uses;
@@ -1131,9 +1330,36 @@ function runFight(
   /** 一次出手（含主动招式），返回实际执行的动作；凭空生花的「马上再出手一次」在里面就地补一次 */
   const takeAction = (self: 0 | 1): Action => {
     const me = sides[self];
+    // 鬼敲门（X22）：门已经敲响，这一手真正出手之前先挨这一下；被打死就直接收场。
+    // 被控跳过时不走这里，记号一直挂着（同前有古人的口径）
+    if (me.knock) {
+      me.knock = false;
+      const applied = applyDamage(me, scaleDamage(KNOCK_BASE + Math.floor(me.f.hp * HP_BONUS * KNOCK_HP_SHARE), me));
+      events.push({ actor: self, kind: 'knock', damage: applied.damage, hp: hpPair(sides[0], sides[1]) });
+      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      if (me.hp === 0) return { kind: 'unarmed' };
+    }
     const asked = controllers[self].decide(view(self));
-    const action = legalize(me, asked);
+    // 封法宝 / 封招式（X21）：这一手按封住的类别过滤；「真正出手」一次就解封（同墨汁的口径，在被控跳过时不走这里）
+    const action = legalize(me, asked, me.sealed);
+    me.sealed = null;
     events.push({ actor: self, kind: 'decide', action, hp: hpPair(sides[0], sides[1]) });
+    // 前有古人（X21）：古人先补一击（必中、直接走 applyDamage，不吃护身印），然后照常出这一手
+    if (me.ancient) {
+      me.ancient = false;
+      const foe = sides[self ^ 1];
+      // X23：必中的古人补击也能被魂影替；鬼眼（X22）看穿幻象的除外
+      if (sparRules && foe.mirror > 0 && !hasSkill(me, 'ghost-eye')) {
+        foe.mirror -= 1;
+        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
+      } else {
+        const strike = applyDamage(foe, scaleDamage(ANCIENT_BASE, foe));
+        events.push({ actor: self, kind: 'ancient', damage: strike.damage, hp: hpPair(sides[0], sides[1]) });
+        if (strike.playDead)
+          events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (foe.hp === 0) return action;
+    }
     // 墨汁：糊着眼的这次出手用掉一次（放招式也算一次，只是招式不受影响）
     const blinded = me.blind > 0;
     if (blinded) me.blind -= 1;
@@ -1144,12 +1370,6 @@ function runFight(
     } else if (action.kind === 'skill') {
       me.used.add(action.skill);
       const foe = sides[self ^ 1];
-      // X23：切磋里主动招式也能被魂影替；只挡会造成伤害的招式，buff / 回血不挡
-      if (sparRules && foe.mirror > 0 && DAMAGING_SKILLS.includes(action.skill)) {
-        foe.mirror -= 1;
-        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
-        return action;
-      }
       if (action.skill === 'bloom') {
         const heal = Math.ceil((me.f.hp * 18) / 100);
         me.hp = Math.min(me.f.hp, me.hp + heal);
@@ -1158,8 +1378,8 @@ function runFight(
       }
       if (action.skill === 'lion-roar') {
         // 狮子吼的音波也算破势的一环，伤害吃半份破势（§平衡：主动招式别比普通攻击还弱）
-        const applied = scaledApplyDamage(foe, LION_BASE + Math.floor((foe.f.hp * HP_BONUS * LION_HP_SHARE) / 1));
-        const landed = foe.hp > 0 && controlLands(self, 'lion-roar');
+        const applied = dealDamage(self, LION_BASE + Math.floor((foe.f.hp * HP_BONUS * LION_HP_SHARE) / 1));
+        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'lion-roar');
         if (landed) control(self, 'stun');
         events.push({
           actor: self,
@@ -1175,7 +1395,7 @@ function runFight(
       if (action.skill === 'blue-whale') {
         // 约一次满额法宝攻击的 1.5–2 倍：固定伤害 + 灵力 + 整份破势；切磋里再收 25%（X23）
         const raw = 34 + me.f.power + Math.floor(foe.f.hp * HP_BONUS);
-        const applied = scaledApplyDamage(foe, sparRules ? Math.floor(raw * BLUE_WHALE_SPAR_SHARE) : raw);
+        const applied = dealDamage(self, sparRules ? Math.floor(raw * BLUE_WHALE_SPAR_SHARE) : raw);
         events.push({
           actor: self,
           kind: 'skill',
@@ -1189,16 +1409,16 @@ function runFight(
       if (action.skill === 'whale-song') {
         // 鲸歌：几声低吟带着灵压，-伤害；控住就睡着，跳过下一次出手（睡着期间挨的攻击都不判闪避）。
         // X20 改成有几率以后补了一点伤害，没控住（或没哄睡）也不至于白费一整手
-        const applied = scaledApplyDamage(
-          foe,
+        const applied = dealDamage(
+          self,
           WHALE_SONG_BASE +
             Math.floor(me.f.power * POWER_FACTOR * 0.6) +
             Math.floor(foe.f.hp * HP_BONUS * WHALE_SONG_HP_SHARE),
         );
-        const landed = foe.hp > 0 && controlLands(self, 'whale-song');
+        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'whale-song');
         if (landed) control(self, 'sleep');
-        // 没哄睡也别白放：听着犯困，出手慢半拍（X20）
-        else if (foe.hp > 0) foe.next += intervalOf(foe) * SLOW_FACTOR;
+        // 没哄睡也别白放：听着犯困，出手慢半拍（X20）；被弹回就没这回事
+        else if (!applied.reversed && !applied.mirrored && foe.hp > 0) foe.next += intervalOf(foe) * SLOW_FACTOR;
         events.push({
           actor: self,
           kind: 'skill',
@@ -1211,14 +1431,14 @@ function runFight(
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'ink') {
-        // 墨汁喷射：对方接下来两次出手糊着眼
-        foe.blind = INK_TURNS;
+        // 墨汁喷射：对方接下来两次出手糊着眼。鬼眼（X22）看穿了，糊不上
+        if (!hasSkill(foe, 'ghost-eye')) foe.blind = INK_TURNS;
         events.push({ actor: self, kind: 'skill', skill: 'ink', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'whale-gulp') {
         // 鲸吞：伤害吃半份破势，回复实际伤害的一半（不超上限）
-        const applied = scaledApplyDamage(
-          foe,
+        const applied = dealDamage(
+          self,
           18 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * GULP_HP_SHARE),
         );
         const heal = Math.min(Math.floor(applied.damage / 2), me.f.hp - me.hp);
@@ -1235,17 +1455,17 @@ function runFight(
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'myriad-self') {
-        // 万我：分出几重魂影——无数个「我」，杀不尽的替身；必中的照样打本体（见 attack）
+        // 万我：分出几重魂影——无数个「我」，杀不尽的替身；X23 切磋里必中也由魂影替（见 dealDamage）
         me.mirror += MYRIAD_MIRRORS;
         events.push({ actor: self, kind: 'skill', skill: 'myriad-self', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'dream-chant') {
         // 魂牵梦绕：必中伤害；控住就把对方神魂牵进梦里，下一拍动不了（入梦期间挨打不判闪避，同睡着）
-        const applied = scaledApplyDamage(
-          foe,
+        const applied = dealDamage(
+          self,
           14 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * CHANT_HP_SHARE),
         );
-        const landed = foe.hp > 0 && controlLands(self, 'dream-chant');
+        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'dream-chant');
         if (landed) control(self, 'dream');
         events.push({
           actor: self,
@@ -1260,12 +1480,13 @@ function runFight(
       }
       if (action.skill === 'finger-sword') {
         // 五指拳心剑：拳心藏剑，剑气穿体——必中，且护体挡不住（不消耗泡泡、不打折）
-        const pierced = foe.bubbles > 0;
-        const applied = scaledApplyDamage(
-          foe,
+        const hadBubble = foe.bubbles > 0;
+        const applied = dealDamage(
+          self,
           22 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FIST_HP_SHARE),
           { pierce: true },
         );
+        const pierced = hadBubble && !applied.reversed && !applied.mirrored;
         events.push({
           actor: self,
           kind: 'skill',
@@ -1279,13 +1500,13 @@ function runFight(
       }
       if (action.skill === 'dragon-palm') {
         // 降龙十八掌（X16）：必中；「亢龙有悔」的后劲留给下一次法宝 / 空手的第一下
-        const applied = scaledApplyDamage(
-          foe,
+        const applied = dealDamage(
+          self,
           DRAGON_PALM_BASE +
             Math.floor(me.f.power * POWER_FACTOR) +
             Math.floor(foe.f.hp * HP_BONUS * DRAGON_PALM_HP_SHARE),
         );
-        me.surge = true;
+        if (!applied.mirrored) me.surge = true;
         events.push({
           actor: self,
           kind: 'skill',
@@ -1298,11 +1519,11 @@ function runFight(
       }
       if (action.skill === 'farewell-wind') {
         // 送友风（X16）：必中伤害；控住就飘起来跳过下一拍（飘着时挨打不判闪避）
-        const applied = scaledApplyDamage(
-          foe,
+        const applied = dealDamage(
+          self,
           FAREWELL_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FAREWELL_HP_SHARE),
         );
-        const landed = foe.hp > 0 && controlLands(self, 'farewell-wind');
+        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'farewell-wind');
         if (landed) control(self, 'float');
         events.push({
           actor: self,
@@ -1315,10 +1536,161 @@ function runFight(
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
         // 串门切磋里另有一次送走判定：单独一条 `:farewell` 种子流，抽中就当场收场
-        if (foe.hp > 0 && farewellRng && farewellRng() < FAREWELL_SEND_CHANCE) {
+        if (
+          !applied.reversed &&
+          !applied.mirrored &&
+          foe.hp > 0 &&
+          farewellRng &&
+          farewellRng() < FAREWELL_SEND_CHANCE
+        ) {
           events.push({ actor: self, kind: 'end', winner: self, reason: 'farewell', hp: hpPair(sides[0], sides[1]) });
           farewellEnd = true;
         }
+      }
+      if (action.skill === 'myriad-palm') {
+        // 万我大手印（X21）：必中；一掌把对方的法宝攥住，下一次出手用不了法宝
+        const applied = dealDamage(
+          self,
+          PALM_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * PALM_HP_SHARE),
+        );
+        const sealed = !applied.reversed && !applied.mirrored && foe.hp > 0;
+        if (sealed) foe.sealed = 'weapon';
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: 'myriad-palm',
+          damage: applied.damage,
+          ...(sealed ? { sealed: 'weapon' as const } : {}),
+          hp: hpPair(sides[0], sides[1]),
+        });
+        if (applied.playDead)
+          events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'reverse-seal') {
+        // 逆流护身印（X21）：双掌对逆流河虚抓，接下来挨到的那一次伤害按七成弹回去（REVERSAL_TIMES）
+        me.reversal = REVERSAL_TIMES;
+        events.push({ actor: self, kind: 'skill', skill: 'reverse-seal', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'ancients') {
+        // 前有古人（X21）：光阴长河里的古人挂着，下一次真正出手时先补一击
+        me.ancient = true;
+        events.push({ actor: self, kind: 'skill', skill: 'ancients', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'eat-hardship') {
+        // 吃苦吃亏（X21）：先吃泡泡，再吃魂影，最后咬一口；顺手清掉自己身上的墨汁
+        me.blind = 0;
+        if (foe.bubbles > 0) {
+          foe.bubbles -= 1;
+          const heal = Math.min(Math.floor(me.f.hp * EAT_HEAL), me.f.hp - me.hp);
+          me.hp += heal;
+          events.push({ actor: self, kind: 'devour', what: 'bubble', heal, hp: hpPair(sides[0], sides[1]) });
+        } else if (foe.mirror > 0) {
+          foe.mirror -= 1;
+          const heal = Math.min(Math.floor(me.f.hp * EAT_MIRROR_HEAL), me.f.hp - me.hp);
+          me.hp += heal;
+          events.push({ actor: self, kind: 'devour', what: 'mirror', heal, hp: hpPair(sides[0], sides[1]) });
+        } else {
+          const applied = dealDamage(self, EAT_BITE_BASE + Math.floor(me.f.power * 0.4));
+          const heal = Math.min(Math.floor(applied.damage / 2), me.f.hp - me.hp);
+          me.hp += heal;
+          events.push({
+            actor: self,
+            kind: 'devour',
+            what: 'bite',
+            damage: applied.damage,
+            heal,
+            hp: hpPair(sides[0], sides[1]),
+          });
+          if (applied.playDead)
+            events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+        }
+      }
+      if (action.skill === 'ghost-hand') {
+        // 鬼手（X22）：必中；一爪掐住对方的招式，下一次出手放不了主动招式
+        const applied = dealDamage(
+          self,
+          HAND_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * HAND_HP_SHARE),
+        );
+        const sealed = !applied.reversed && !applied.mirrored && foe.hp > 0;
+        if (sealed) foe.sealed = 'skill';
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: 'ghost-hand',
+          damage: applied.damage,
+          ...(sealed ? { sealed: 'skill' as const } : {}),
+          hp: hpPair(sides[0], sides[1]),
+        });
+        if (applied.playDead)
+          events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'headless-shadow') {
+        // 无头鬼影（X22）：必中；这一下打死的，假死遁救不回来（头已经没了）
+        const applied = dealDamage(
+          self,
+          // 任务书这一门按灵力×0.5 算（其余招式是 ×0.75）
+          SHADOW_BASE + Math.floor(me.f.power * 0.5) + Math.floor(foe.f.hp * HP_BONUS * SHADOW_HP_SHARE),
+          { noPlayDead: true },
+        );
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: 'headless-shadow',
+          damage: applied.damage,
+          ...(foe.hp === 0 ? { behead: true as const } : {}),
+          hp: hpPair(sides[0], sides[1]),
+        });
+      }
+      if (action.skill === 'ghost-knock') {
+        // 鬼敲门（X22）：施放本身不造成伤害，只给对方挂上敲门声
+        foe.knock = true;
+        events.push({ actor: self, kind: 'skill', skill: 'ghost-knock', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'ghost-painting') {
+        // 鬼画（X22）：随机封住对方一门被动，本场失效；没有被动可封就改画成伤害
+        const passives = foe.f.skills.filter((id) => SKILLS[id].kind === '被动');
+        if (passives.length > 0) {
+          const sealedPassive = pick(rng, passives);
+          foe.sealedPassive = sealedPassive;
+          // 泡泡 / 灵兽的次数已经发下去了，封掉的时候立即清零
+          if (sealedPassive === 'bubble') foe.bubbles = 0;
+          if (sealedPassive === 'spirit-beast') foe.beastLeft = 0;
+          events.push({
+            actor: self,
+            kind: 'skill',
+            skill: 'ghost-painting',
+            paint: sealedPassive,
+            hp: hpPair(sides[0], sides[1]),
+          });
+        } else {
+          const applied = dealDamage(self, PAINT_BASE + Math.floor(me.f.power * PAINT_POWER));
+          events.push({
+            actor: self,
+            kind: 'skill',
+            skill: 'ghost-painting',
+            damage: applied.damage,
+            hp: hpPair(sides[0], sides[1]),
+          });
+          if (applied.playDead)
+            events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+        }
+      }
+      if (action.skill === 'ghost-blood') {
+        // 鬼血（X22）：必中；对方驾驭的被动越多，这一口咬得越狠
+        const passives = foe.f.skills.filter((id) => SKILLS[id].kind === '被动').length;
+        const applied = dealDamage(
+          self,
+          BLOOD_BASE + Math.floor(me.f.power * BLOOD_POWER) + passives * BLOOD_PER_PASSIVE,
+        );
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: 'ghost-blood',
+          damage: applied.damage,
+          hp: hpPair(sides[0], sides[1]),
+        });
+        if (applied.playDead)
+          events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
     } else {
       attack(self, action, blinded);
@@ -1394,7 +1766,7 @@ export function tribulate(f: Fighter, strikes: number, stage: number, seed: stri
     }
     const dodgeRoll = rng();
     const dmgRoll = rng();
-    const halfRate = dodgeRate(me.f) / 2;
+    const halfRate = dodgeRate(me) / 2;
     if (dodgeRoll < halfRate) {
       events.push({ actor: 0, kind: 'dodge', hp: [me.hp, 0] });
       continue;

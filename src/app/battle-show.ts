@@ -175,6 +175,15 @@ export type FxAssetName =
   // X16：降龙十八掌的金龙、送友风的清风
   | '金龙'
   | '清风'
+  // X21：万我大手印的巨掌、前有古人的古人虚影（逆流护身印的袍子直接画在动作素材里）
+  | '巨掌'
+  | '古人虚影'
+  // X22：鬼手、无头鬼影、鬼敲门的门、鬼画的符、鬼血的血珠
+  | '鬼手'
+  | '无头鬼影'
+  | '门'
+  | '符画'
+  | '血珠'
   // X8
   | '雪球'
   | '羽毛'
@@ -334,6 +343,36 @@ export const ATTACK_SHOW: Record<string, AttackShow> = {
     action: '出手-送友风',
     fly: { kind: '清风', track: 'float', hitFx: '命中-旋风', react: FLOAT_ANIM },
   },
+  // 万我大手印（X21）：双掌前推，巨掌从天上压下来，对方被压得蹲身
+  'myriad-palm': {
+    action: '出手-大手印',
+    fly: { kind: '巨掌', track: 'slam', hitFx: '命中-巨浪', react: '受击-碾压' },
+  },
+  // 逆流护身印（X21）：双掌对空虚抓，白袍披身；没有飞行物，反弹由 `reverse` 事件演
+  'reverse-seal': { action: '出手-护身印' },
+  // 前有古人（X21）：合掌，背后光阴长河；古人虚影在 `ancient` 事件时自己冲出去
+  ancients: { action: '出手-古人' },
+  // 吃苦吃亏（X21）：张口一吸；咬一口时对方播 `受击-被吃`
+  'eat-hardship': { action: '出手-吃苦' },
+  // 鬼手（X22）：一条手臂向左伸出、五指张开抓过去，掐住对方
+  'ghost-hand': {
+    action: '出手-鬼手',
+    fly: { kind: '鬼手', track: 'thrust', hitFx: '命中-斩', react: '受击-掐住' },
+  },
+  // 无头鬼影（X22）：背后浮起没有头的黑影，冲过去取首级；这一下打死的不画假死
+  'headless-shadow': {
+    action: '出手-鬼影',
+    fly: { kind: '无头鬼影', track: 'line', hitFx: '命中-魂碎', react: '受击-断头' },
+  },
+  // 鬼敲门（X22）：抬手在看不见的门上敲两下；伤害在对方下一次出手时由 `knock` 事件结算
+  'ghost-knock': { action: '出手-敲门' },
+  // 鬼画（X22）：指尖在胸前画符；符纹在 `paint` 事件时飞过去贴在对方身上
+  'ghost-painting': { action: '出手-鬼画' },
+  // 鬼血（X22）：指尖一抹，几颗血珠浮起打向对方
+  'ghost-blood': {
+    action: '出手-鬼血',
+    fly: { kind: '血珠', track: 'line', hitFx: '命中-墨汁', count: 3, gapMs: 90 },
+  },
   // 回血：作用在自己身上，照旧播整段素材，没有飞行物
   bloom: { action: '招式-凭空生花' },
   // 三种追加出手
@@ -467,6 +506,17 @@ export const RELEASE: Record<string, { ms: number; hand: [number, number]; catch
   '出手-降龙': { ms: 2_250, hand: [190, 219] },
   // 送友风：挥手后往外一送那一刻，清风从这里飘出去（X16）
   '出手-送友风': { ms: 2_750, hand: [228, 222] },
+  // X21：四门的出手时刻与手位（量法同上面：大手印双掌向左侧推到位 / 护身印胸前合掌 / 古人双手伸到最远 / 吃苦张口一吸）
+  '出手-大手印': { ms: 1_250, hand: [222, 222] },
+  '出手-护身印': { ms: 1_500, hand: [282, 232] },
+  '出手-古人': { ms: 2_250, hand: [195, 205] },
+  '出手-吃苦': { ms: 1_250, hand: [255, 152] },
+  // X22：鬼手掐到最远的那一帧 / 鬼影指向定住 / 敲门抬手叩下 / 鬼画指尖在胸前停住 / 鬼血指尖一抹
+  '出手-鬼手': { ms: 917, hand: [188, 229] },
+  '出手-鬼影': { ms: 2_000, hand: [230, 200] },
+  '出手-敲门': { ms: 1_500, hand: [280, 200] },
+  '出手-鬼画': { ms: 1_500, hand: [280, 200] },
+  '出手-鬼血': { ms: 1_500, hand: [280, 200] },
   // 对手动作（Y2）：离手时刻与手的位置按 YA 素材「量出来的时刻」填；熔岩鳄、他派蛊师复用狮獒 / 韩不留，
   // 调用方把它们的动画前缀传成被复用的那只
   '对手-野狗-出手': { ms: 1_833, hand: [0, 250] },
@@ -1332,6 +1382,44 @@ export function timeline(
       if (shot.reacts) pushReaction(shot.fly.reverse ? shot.launch : shot.impact, victim, reactAnim, hpBefore);
       // 掉血与结算台词都在命中那一刻（鲸吞的伤害和回血一起，在灵光飞回嘴边时结算）
       steps.push({ at: shot.impact, who: shooter, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 逆流护身印（X21）：白袍把这一下弹回去——只刷台词与血条。攻击方刚出完手、下一手就在眼前，
+    // 排整段受击会把它的出手从中间切断；这一步靠台词「原样打回」和血条变化交代
+    if (event.kind === 'reverse') {
+      steps.push({ at, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 前有古人（X21）：古人虚影从出手方冲出去补一击，命中那一刻对方受击
+    if (event.kind === 'ancient') {
+      const fly: Fly = { kind: '古人虚影', track: 'thrust', hitFx: '命中-斩' };
+      const impact = pushShot(at, event.actor, '出手-古人', fly, hpBefore);
+      pushReaction(impact, (event.actor ^ 1) as 0 | 1, HIT_ANIM, event.hp);
+      steps.push({ at: impact, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 吃苦吃亏（X21）：咬一口时对方播 `受击-被吃`；吃泡泡 / 魂影只刷血条与台词
+    if (event.kind === 'devour') {
+      if (event.what === 'bite') pushReaction(at, (event.actor ^ 1) as 0 | 1, '受击-被吃', event.hp);
+      steps.push({ at, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 鬼敲门（X22）：门后的人浑身一震——只刷台词与血条。敲门声在它自己出手的那一瞬结算，
+    // 排整段受击会把它紧接着的出手切断
+    if (event.kind === 'knock') {
+      steps.push({ at, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 鬼画（X22）：符纹从指尖飞过去贴在对方身上（封被动；没被动可封时这一下带伤害，走下面的正常分支）
+    if (event.kind === 'skill' && event.paint) {
+      const fly: Fly = { kind: '符画', track: 'line', hitFx: '命中-魂碎' };
+      const impact = pushShot(at, event.actor, '出手-鬼画', fly, hpBefore);
+      steps.push({ at: impact, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
       continue;
     }
 

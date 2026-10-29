@@ -105,6 +105,16 @@ const SKILL_EFFECT: Record<SkillId, string> = {
   'finger-sword': '必中且穿护体',
   'dragon-palm': '必中伤害，下一手法宝或空手带后劲',
   'farewell-wind': '必中伤害并可能让对方飘过下一拍',
+  'myriad-palm': '必中伤害，并让对方下一次出手用不了法宝',
+  'reverse-seal': '接下来挨到的一次伤害按七成弹回对方',
+  ancients: '下一次出手时古人先补一击',
+  'eat-hardship': '吃掉对方的泡泡或魂影回血，都没有就咬一口',
+  'ghost-eye': '看破对方的分身与魂影，墨汁糊眼无效',
+  'ghost-hand': '必中伤害，并让对方下一次出手用不了主动招式',
+  'headless-shadow': '必中伤害，打死的救不回来（假死遁无效）',
+  'ghost-knock': '对方下一次真正出手前先挨一记敲门声',
+  'ghost-painting': '封住对方随机一门被动，本场失效；没有被动就改成伤害',
+  'ghost-blood': '必中伤害，对方被动招式越多打得越重',
   'jelly-clone': '挨打时可能用水母替身挡下',
 };
 

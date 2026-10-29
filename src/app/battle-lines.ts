@@ -25,6 +25,7 @@ const HIT_LINES: Record<string, string[]> = {
 const KIND_LINES: Record<string, string[]> = {
   dodge: ['{a}侧身一闪躲开了', '{a}垫步后跳，堪堪躲过', '{a}趴下一缩，让了个空'],
   dodgeDove: ['{a}化成一只鸽子飞开了', '{a}鸽影一闪，扑棱棱躲开'],
+  dodgeGhostEye: ['{a}鬼眼一睁，早看穿了这一下', '{a}眼里幽光一闪，侧身让过'],
   combo: ['{a}趁势再补一下，-{d}', '{a}不给喘息机会，追击！-{d}', '{a}连招接上，-{d}'],
   counter: ['{a}顺手反打一记，-{d}', '{a}后发先至回敬一拳，-{d}'],
   beast: ['{a}的灵兽窜上去咬了一口，-{d}', '{a}的灵兽扑出偷袭，-{d}'],
@@ -53,7 +54,44 @@ const SKILL_LINES: Record<string, string[]> = {
   'finger-sword': ['{a}五指收拢成拳、高举过顶，拳心射出一道剑光，-{d}', '{a}拳心一亮，剑光已到{b}身上，-{d}'],
   'dragon-palm': ['{a}一掌推出，亢龙有悔！-{d}', '{a}掌风化作龙影，直取{b}，-{d}'],
   'farewell-wind': ['{a}袖口一卷，一阵清风送向{b}，-{d}', '{a}挥手道别：一路顺风～-{d}'],
+  'myriad-palm': ['{a}推手成印，{b}被巨掌攥住，-{d}', '{a}沉声一喝：万我·大手印！-{d}'],
+  'reverse-seal': ['{a}双掌对空虚抓，万我·逆流护身印，白袍披身', '{a}逆流一卷，手上蒙了层水雾'],
+  ancients: ['{a}合掌，身后光阴长河缓缓展开，前有古人', '{a}召来一位古人虚影，立于身侧'],
+  'eat-hardship': ['{a}张口一吸，苦与亏都往肚里咽', '{a}把这份亏吃了下去，涨了点气血'],
+  'ghost-hand': ['{a}一只鬼手探出，掐住{b}的咽喉，-{d}', '{a}鬼手一扣，{b}动弹不得，-{d}'],
+  'headless-shadow': ['{a}身后浮起无头鬼影，掠过{b}，-{d}', '{a}的影子一扑，{b}颈上一凉，-{d}'],
+  'ghost-knock': ['{a}在看不见的门上敲了两下，门后只剩死寂', '{a}叩响门扉，{b}耳边全是敲门声'],
+  'ghost-painting': ['{a}指尖一勾，画出一道扭曲的符', '{a}胸前一划，鬼画沿着纹路爬过去'],
+  'ghost-blood': ['{a}指尖一抹，几颗血珠打向{b}，-{d}', '{a}一弹指，暗红的血珠钉在{b}身上，-{d}'],
 };
+
+/** 逆流护身印弹回去（X21）：`{a}` 是护身的一方，`{b}` 是打过来的那一方 */
+const REVERSE_LINES = ['{a}白袍一卷，原样打回{b}，-{d}', '{a}逆流一荡，{b}自食其力，-{d}'];
+
+/** 前有古人补的那一击（X21） */
+const ANCIENT_LINES = ['{a}召来的古人冲出光阴长河，-{d}', '{a}身后古人虚影补了一击，-{d}'];
+
+/** 吃苦吃亏吃掉了什么（X21） */
+const DEVOUR_LINES: Record<string, string[]> = {
+  bubble: ['{a}一口吃掉{b}的泡泡护体，+{h}', '{a}把{b}的泡泡吞了，气血 +{h}'],
+  mirror: ['{a}一口吞掉{b}一重魂影，+{h}', '{a}把{b}的魂影吃了，气血 +{h}'],
+  bite: ['{a}咬住{b}不放，-{d}，气血 +{h}', '{a}扑上去咬了一口，-{d}，+{h}'],
+};
+
+/** 万我大手印把对方法宝攥住了（X21）：`skill` 事件带 `sealed: 'weapon'` 时用这两句 */
+const SEALED_LINES = ['{a}巨掌一攥，{b}法宝被攥住了，-{d}', '{a}大手印一合，{b}法宝脱手，-{d}'];
+
+/** 鬼手把对方的招式掐住了（X22）：`skill` 事件带 `sealed: 'skill'` 时用这两句 */
+const SEALED_SKILL_LINES = ['{a}一把掐住{b}的招式，这一手使不出来，-{d}', '{a}鬼手扣住{b}的招式，-{d}'];
+
+/** 无头鬼影取了首级（X22）：`skill` 事件带 `behead` 时用这两句 */
+const BEHEAD_LINES = ['{a}的鬼影取下{b}的头颅，-{d}', '{a}手起影落，{b}已没了头，-{d}'];
+
+/** 鬼画封住了对方一门被动（X22）：`skill` 事件带 `paint` 时用这两句 */
+const PAINT_LINES = ['{a}笔锋一转，一道符纹贴上{b}，封了一门被动', '{a}画出鬼画，{b}身上有东西被抹去了'];
+
+/** 鬼敲门的反噬（X22）：`knock` 事件，`{a}` 是被敲门的一方 */
+const KNOCK_LINES = ['{a}耳边响起敲门声，浑身一震，-{d}', '敲门声一过，{a}气血少了一截，-{d}'];
 
 /** 控制被扛住（X20）：狮子吼 / 鲸歌 / 魂牵梦绕 / 送友风没压住，只说伤害与对方的反应 */
 const RESIST_LINES: Record<string, string[]> = {
@@ -148,8 +186,9 @@ export function lineOf(
     case 'combo':
       return decorate(fill(pick(event.surge ? FLAG_LINES.surge : KIND_LINES.combo), a, b, event.damage));
     case 'dodge': {
+      const hasGhostEye = skillSets?.[event.actor]?.includes('ghost-eye') ?? false;
       const hasDove = skillSets?.[event.actor]?.includes('dove') ?? false;
-      const lines = hasDove ? KIND_LINES.dodgeDove : KIND_LINES.dodge;
+      const lines = hasGhostEye ? KIND_LINES.dodgeGhostEye : hasDove ? KIND_LINES.dodgeDove : KIND_LINES.dodge;
       return fill(pick(lines), a);
     }
     case 'counter':
@@ -185,6 +224,10 @@ export function lineOf(
     case 'play-dead':
       return fill(pick(KIND_LINES['play-dead']), a);
     case 'skill':
+      if (event.behead) return fill(pick(BEHEAD_LINES), a, b, event.damage ?? 0);
+      if (event.sealed === 'weapon') return fill(pick(SEALED_LINES), a, b, event.damage ?? 0);
+      if (event.sealed === 'skill') return fill(pick(SEALED_SKILL_LINES), a, b, event.damage ?? 0);
+      if (event.paint) return fill(pick(PAINT_LINES), a, b);
       if (event.pierce) return decorate(fill(pick(FLAG_LINES.pierce), a, b, event.damage ?? 0));
       if (event.resisted)
         return decorate(
@@ -193,6 +236,14 @@ export function lineOf(
       return decorate(fill(pick(SKILL_LINES[event.skill]), a, b, event.damage ?? 0, event.heal ?? 0));
     case 'strike':
       return decorate(fill(pick(KIND_LINES.strike), a, b, event.damage));
+    case 'reverse':
+      return fill(pick(REVERSE_LINES), a, b, event.damage);
+    case 'ancient':
+      return fill(pick(ANCIENT_LINES), a, b, event.damage);
+    case 'devour':
+      return fill(pick(DEVOUR_LINES[event.what]), a, b, event.damage ?? 0, event.heal ?? 0);
+    case 'knock':
+      return fill(pick(KNOCK_LINES), a, b, event.damage);
     case 'end':
       return fill(pick(event.reason === 'farewell' ? FAREWELL_END_LINES : END_LINES), a, b);
   }

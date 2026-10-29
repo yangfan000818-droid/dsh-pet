@@ -128,6 +128,96 @@ const SCENES = {
       { actor: 0, kind: 'skill', skill: 'finger-sword', damage: 30, pierce: true, hp },
     ],
   },
+  // X21：万我大手印的巨掌压下并封法宝、逆流护身印把伤害弹回、前有古人的古人虚影补一击、
+  // 吃苦吃亏吃魂影与咬一口
+  万我大手印: {
+    events: [
+      start,
+      decide(0, skill('myriad-palm')),
+      { actor: 0, kind: 'skill', skill: 'myriad-palm', damage: 30, sealed: 'weapon', hp },
+      decide(1, { kind: 'unarmed' }),
+      hit(1),
+    ],
+  },
+  逆流护身印: {
+    events: [
+      start,
+      decide(1, skill('reverse-seal')),
+      { actor: 1, kind: 'skill', skill: 'reverse-seal', hp },
+      decide(0, weapon('water-gun')),
+      { actor: 0, kind: 'reverse', damage: 20, hp: [80, 100] },
+      decide(0, { kind: 'unarmed' }),
+      hit(0),
+    ],
+  },
+  前有古人: {
+    events: [
+      start,
+      decide(0, skill('ancients')),
+      { actor: 0, kind: 'skill', skill: 'ancients', hp },
+      decide(0, weapon('water-gun')),
+      { actor: 0, kind: 'ancient', damage: 80, hp: [100, 20] },
+      whit(0, 'water-gun'),
+    ],
+  },
+  吃苦吃亏吃魂影: {
+    events: [
+      start,
+      decide(0, skill('eat-hardship')),
+      { actor: 0, kind: 'skill', skill: 'eat-hardship', hp },
+      { actor: 0, kind: 'devour', what: 'mirror', heal: 12, hp: [100, 100] },
+    ],
+  },
+  吃苦吃亏咬一口: {
+    events: [
+      start,
+      decide(0, skill('eat-hardship')),
+      { actor: 0, kind: 'skill', skill: 'eat-hardship', hp },
+      { actor: 0, kind: 'devour', what: 'bite', damage: 44, heal: 22, hp: [100, 56] },
+    ],
+  },
+  // X22：鬼手掐住并封招式、无头鬼影取首级、鬼敲门反噬、鬼画封被动、鬼血血珠、鬼眼破替身
+  鬼手: {
+    events: [
+      start,
+      decide(0, skill('ghost-hand')),
+      { actor: 0, kind: 'skill', skill: 'ghost-hand', damage: 26, sealed: 'skill', hp },
+      decide(1, { kind: 'unarmed' }),
+      hit(1),
+    ],
+  },
+  无头鬼影: {
+    events: [
+      start,
+      decide(0, skill('headless-shadow')),
+      { actor: 0, kind: 'skill', skill: 'headless-shadow', damage: 40, behead: true, hp: [100, 0] },
+      { actor: 0, kind: 'end', winner: 0, reason: 'ko', hp: [100, 0] },
+    ],
+  },
+  鬼敲门: {
+    events: [
+      start,
+      decide(0, skill('ghost-knock')),
+      { actor: 0, kind: 'skill', skill: 'ghost-knock', hp },
+      decide(1, { kind: 'unarmed' }),
+      { actor: 1, kind: 'knock', damage: 26, hp: [100, 74] },
+      hit(1),
+    ],
+  },
+  鬼画封被动: {
+    events: [
+      start,
+      decide(0, skill('ghost-painting')),
+      { actor: 0, kind: 'skill', skill: 'ghost-painting', paint: 'bubble', hp },
+    ],
+  },
+  鬼血: {
+    events: [start, decide(0, skill('ghost-blood')), { actor: 0, kind: 'skill', skill: 'ghost-blood', damage: 30, hp }],
+  },
+  鬼眼破替身: {
+    events: [start, decide(0, weapon('water-gun')), whit(0, 'water-gun')],
+    skillSets: [[], ['jelly-clone']],
+  },
   // X16：降龙十八掌冲过去打、再退回来；送友风把人吹得飘起来；串门里送走（客人整扇窗飘走）
   降龙十八掌: {
     events: [
