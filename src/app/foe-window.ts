@@ -47,6 +47,13 @@ export interface FoeWindowOptions {
   scale?: number;
   /** 精英的画法：放大 1.2 倍（没给 scale 时）+ 立绘加一圈金边 */
   elite?: boolean;
+  /** 待机动画（群架里没有立绘的影子用）：没在演动作时循环播这一段，缺素材就退回剪影 */
+  idle?: string;
+  /**
+   * 倒地后留在原地（群架）：`战斗-倒地` 素材结尾会再站起来，所以停在倒下的那一段、
+   * 淡到 30% 躺在环上；不给就照 1v1 的老样子：播完淡出。
+   */
+  holdDown?: boolean;
 }
 
 /** 和 `GuestWindow` 同形（`BattleShow`、擂台、特效层不用改） */
@@ -59,6 +66,8 @@ export interface FoeWindow {
   say(text: string, durationMs?: number): void;
   /** 播一段对手动画（`<前缀>-<动作>`；页面先试视频，失败退回 CSS） */
   play(anim: string, rate?: number): void;
+  /** 转身（群架围圈用）：'left' 朝左、'right' 朝右；平常跟着站在宠物哪边自动转 */
+  face(facing: 'left' | 'right'): void;
   /** 开演前把要播的动画取到页面里（同客人窗口的预热） */
   preload(anims: string[]): void;
   /** 淡出（客串说完台词用；Y5） */
@@ -165,6 +174,8 @@ export function openFoeWindow(
       filter: options.filter ?? '',
       elite: options.elite === true,
       facing: side === 'left' ? 'right' : 'left',
+      idle: options.idle ?? '',
+      holdDown: options.holdDown === true,
     })})`,
   );
   return {
@@ -174,6 +185,7 @@ export function openFoeWindow(
     bounds: () => bounds,
     say: (text, durationMs) => run(`foe.say(${JSON.stringify(text)}, ${Number(durationMs) || 10000})`),
     play: (anim, rate) => run(`foe.play(${JSON.stringify(anim)}, ${Number.isFinite(Number(rate)) ? Number(rate) : 1})`),
+    face: (facing) => run(`foe.face(${JSON.stringify(facing)})`),
     preload: (anims) => run(`foe.preload(${JSON.stringify(anims)})`),
     fade: () => run('foe.fade()'),
     pin(on) {
@@ -204,6 +216,8 @@ body{display:flex;flex-direction:column;justify-content:flex-end;align-items:cen
 #bubble.on{opacity:1}
 #stage{position:relative;width:100%;aspect-ratio:16/9;display:block;transition:opacity .6s}
 #stage.gone{opacity:0}
+/* 淘汰（群架）：停在倒地的最后一帧、淡到 30%，留在环上不消失（围成一圈的构图不塌） */
+#stage.out{opacity:.3}
 /* 朝向：素材原样朝左，朝右时整段镜像。翻转放在外层，动作动画放在 #media 里，两者不抢 transform */
 #flip{position:absolute;inset:0}
 #flip.right{transform:scaleX(-1)}
@@ -242,6 +256,10 @@ const bubble = document.getElementById('bubble');
 const cached = {};
 let prefix = '';
 let current = '';
+let idleName = '';
+let hasPortrait = false;
+// 倒地后留在原地（群架）：素材结尾会再站起来，所以停在倒下的那一段（见 timeupdate）
+let holdDown = false;
 let token = 0;
 let hideTimer = null;
 let fadeTimer = null;
@@ -253,19 +271,45 @@ function showPortrait() {
   video.classList.remove('on');
   portrait.classList.add('on');
 }
+// 没在演动作时：有立绘就显示立绘；群架里的影子没有立绘，循环播待机动画，免得只剩一块剪影
+function showIdle() {
+  if (!idleName) {
+    showPortrait();
+    return;
+  }
+  showPortrait();
+  current = idleName;
+  clearTimeout(fadeTimer);
+  clearAction();
+  stage.classList.remove('gone');
+  stage.classList.remove('out');
+  video.loop = true;
+  video.src = cached[idleName] || ANIM + encodeURIComponent(idleName) + '.webm';
+  video.playbackRate = 1;
+  video.classList.add('on');
+  portrait.classList.remove('on');
+  // 待机视频顶替剪影：剪影只在既没立绘也没画面时兜底，别让它留在背后当一块色块（还会被换色滤镜染上色）
+  media.classList.remove('silhouette');
+  video.play().catch(() => fallback(idleName));
+}
 function clearAction() {
   media.classList.remove('lunge', 'hit', 'dodge', 'fall', 'jump');
 }
 function fallback(name) {
   showPortrait();
+  // 没有立绘时才退回剪影色块（有待机 / 动作画面时上面那一步已经撤掉了）
+  if (!hasPortrait) media.classList.add('silhouette');
   clearAction();
+  // 待机动画取不到素材：留立绘或剪影站着，不播兜底动作（「待机呼吸休闲」不是出手）
+  if (name === idleName) return;
   // 重排一次，保证同一个兜底动作连续播也能从头开始
   void media.offsetWidth;
   const kind = actionClass(name);
   media.classList.add(kind);
   if (kind === 'fall') {
+    // CSS 兜底倒地：群架停在倒下的样子（30% 留在环上），1v1 照老样子淡出
     clearTimeout(fadeTimer);
-    fadeTimer = setTimeout(() => stage.classList.add('gone'), 1_000);
+    fadeTimer = setTimeout(() => stage.classList.add(holdDown ? 'out' : 'gone'), 1_000);
   }
 }
 function play(name, rate) {
@@ -274,10 +318,12 @@ function play(name, rate) {
   clearTimeout(fadeTimer);
   clearAction();
   stage.classList.remove('gone');
+  stage.classList.remove('out');
   const full = fullName(current);
   showPortrait();
   video.classList.add('on');
   portrait.classList.remove('on');
+  media.classList.remove('silhouette');
   video.loop = false;
   video.src = cached[full] || ANIM + encodeURIComponent(full) + '.webm';
   // 倍速要在换源之后写：改 src 会走一遍媒体的 load 算法，把 playbackRate 打回默认值
@@ -293,29 +339,48 @@ video.addEventListener('error', () => {
 // 立绘也缺失：退回一个剪影色块，名字由名牌显示（素材缺了不崩，§2.1）
 portrait.addEventListener('error', () => {
   portrait.style.visibility = 'hidden';
+  hasPortrait = false;
   media.classList.add('silhouette');
+});
+// 群架的倒地：素材 5 秒、结尾会再站起来——播到一半（已经倒地）就停住，淡到 30% 留在环上
+video.addEventListener('timeupdate', () => {
+  if (!holdDown || video.loop || actionClass(current) !== 'fall') return;
+  const total = video.duration;
+  if (!Number.isFinite(total) || total <= 0) return;
+  if (video.currentTime / total < 0.5) return;
+  video.pause();
+  stage.classList.add('out');
 });
 video.addEventListener('ended', () => {
   if (actionClass(current) === 'fall') {
-    // 倒地素材结尾就倒在地上：停在最后一帧，过一会儿再淡出，不回到立绘
+    if (holdDown) {
+      // 没赶上 timeupdate（例如倍速播放一帧跨过）：停在这一帧、淡到 30%
+      stage.classList.add('out');
+      return;
+    }
+    // 1v1 的老样子：停在最后一帧，过一会儿淡出
     clearTimeout(fadeTimer);
     fadeTimer = setTimeout(() => stage.classList.add('gone'), 400);
   } else {
-    showPortrait();
+    showIdle();
   }
 });
 window.foe = {
   setup(data) {
     document.getElementById('tag').textContent = String(data.name ?? '');
     prefix = String(data.prefix ?? '');
+    idleName = String(data.idle ?? '');
+    holdDown = data.holdDown === true;
     const filter = String(data.filter ?? '').trim();
     const glow = data.elite ? 'drop-shadow(0 0 5px #f5c542) drop-shadow(0 0 11px #f5c542)' : '';
     media.style.setProperty('--tint', [filter, glow].filter(Boolean).join(' ') || 'none');
     portrait.style.visibility = '';
     media.classList.remove('silhouette');
+    hasPortrait = Boolean(data.portrait);
     if (data.portrait) portrait.src = String(data.portrait);
     else media.classList.add('silhouette');
     flip.classList.toggle('right', data.facing === 'right');
+    showIdle();
   },
   face(facing) {
     flip.classList.toggle('right', facing === 'right');

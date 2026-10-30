@@ -244,14 +244,22 @@ function clamp(value: number, size: number, start: number, extent: number): numb
  * 只有一边（渡劫没有对手、对手窗口还没开）就按那一只排；谁都不知道在哪时回 null（这一场不放特效）。
  */
 export function fxBounds(self: Stage | null, foe: Stage | null, workArea: Rect): Rect | null {
-  const stages = [self, foe].filter((stage): stage is Stage => !!stage && stage.width > 0 && stage.height > 0);
-  if (stages.length === 0) return null;
-  const left = Math.min(...stages.map((stage) => stage.x));
-  const right = Math.max(...stages.map((stage) => stage.x + stage.width));
-  const top = Math.min(...stages.map((stage) => stage.y));
-  const bottom = Math.max(...stages.map((stage) => stage.y + stage.height));
+  return fxBoundsAll([self, foe], workArea);
+}
+
+/**
+ * 任意多只舞台的并集（群架用）：给出 N 只的联合矩形，特效窗口盖住整圈。
+ * 只认宽高都大于 0 的舞台；一只都没有时回 null。
+ */
+export function fxBoundsAll(stages: readonly (Stage | null)[], workArea: Rect): Rect | null {
+  const real = stages.filter((stage): stage is Stage => !!stage && stage.width > 0 && stage.height > 0);
+  if (real.length === 0) return null;
+  const left = Math.min(...real.map((stage) => stage.x));
+  const right = Math.max(...real.map((stage) => stage.x + stage.width));
+  const top = Math.min(...real.map((stage) => stage.y));
+  const bottom = Math.max(...real.map((stage) => stage.y + stage.height));
   // 上方余量按高一些的那只的画布高算（够 arc 的顶点，slam 的高抛和乌云也放得下）
-  const room = Math.round(Math.max(...stages.map((stage) => stage.height)) * TOP_ROOM);
+  const room = Math.round(Math.max(...real.map((stage) => stage.height)) * TOP_ROOM);
   const width = Math.round(right - left + 2 * SIDE_ROOM);
   const height = Math.round(bottom - top + room + SIDE_ROOM);
   return {
@@ -289,16 +297,16 @@ export function feetPoint(stage: Stage): number {
  */
 function holdSpec(
   shot: Shot,
-  who: 0 | 1,
-  stages: [Stage | null, Stage | null],
+  from: Stage | null,
+  to: Stage | null,
   bounds: Rect,
   shadow: boolean,
 ): FxSpec | null {
   const hold = shot.hold;
   if (!hold) return null;
   const anchor = hold.anchor ?? 'self';
-  const self = stages[who];
-  const foe = stages[(who ^ 1) as 0 | 1];
+  const self = from;
+  const foe = to;
   if ((anchor !== 'foe' && !self) || (anchor !== 'self' && !foe)) return null;
   let center: [number, number];
   let basis: number;
@@ -351,14 +359,28 @@ export function fxSpec(
   bounds: Rect,
   shadow = false,
 ): FxSpec | null {
-  if (shot.hold) return holdSpec(shot, who, stages, bounds, shadow);
+  return fxSpecBetween(shot, stages[who], stages[(who ^ 1) as 0 | 1], bounds, shadow);
+}
+
+/**
+ * 任意两只之间的飞行物几何（群架用）：从 `from` 打到 `to`，不假设谁在左谁在右。
+ * `fxSpec` 只是它的 0/1 查表包装，1v1 行为不变。
+ */
+export function fxSpecBetween(
+  shot: Shot,
+  fromStage: Stage | null,
+  toStage: Stage | null,
+  bounds: Rect,
+  shadow = false,
+): FxSpec | null {
+  if (shot.hold) return holdSpec(shot, fromStage, toStage, bounds, shadow);
   let start: [number, number];
   let end: [number, number];
   let target: Stage;
   let behind: [number, number] | null = null;
   if (shot.sky) {
     // 天雷：落在渡劫者头顶，乌云悬在正上方
-    const self = stages[who];
+    const self = fromStage;
     if (!self) return null;
     target = self;
     // 被泡泡挡下就劈在泡泡顶上；被躲开就劈在身后的地上
@@ -366,8 +388,8 @@ export function fxSpec(
     end = shot.miss ? toScreen(self, BODY.x1 + 30, FEET_Y) : head;
     start = [head[0], self.y - self.height * CLOUD_ABOVE];
   } else {
-    const from = stages[who];
-    const to = stages[(who ^ 1) as 0 | 1];
+    const from = fromStage;
+    const to = toStage;
     if (!from || !to) return null;
     target = to;
     const hand = handPoint(from, shot.hand);
@@ -411,7 +433,7 @@ export function fxSpec(
   }
   const art = FX_SIZE[shot.kind];
   // 金龙比宠物大：按两只里大一点的那只算（切磋时客人小一号，不能把龙画得比出手方还小）
-  const basis = shot.track === 'surge' ? Math.max(target.height, stages[who]?.height ?? 0) : target.height;
+  const basis = shot.track === 'surge' ? Math.max(target.height, fromStage?.height ?? 0) : target.height;
   const px = (ratio: number): number => Math.max(8, Math.round(ratio * basis));
   const size = px(art.size);
   // 分身 / 魂影挨的那一下：水母碎成泡泡、魂影碎成魂屑（不画法宝自己的命中特效）
@@ -483,6 +505,8 @@ export interface FxElectron {
 export interface FxWindow {
   /** 放一发（时间线到点交给这里）；窗口没开成、拿不到舞台时什么都不做 */
   fire(shot: Shot, who: 0 | 1): void;
+  /** 按编号从第 from 只打到第 to 只（群架用）：任意两只，不假设 0/1 */
+  fireAt(shot: Shot, from: number, to: number): void;
   /** 重摆位置（宠物走位了、对手窗口挪了）：正在飞的跟着挪同样的位移，才不会在屏幕上跳一下 */
   place(): void;
   /** 过一会儿关掉（先让最后那一下的命中特效放完） */
@@ -496,7 +520,7 @@ export interface FxWindow {
  * @param electron 只用到 BrowserWindow
  * @param pageUrl 本机服务的 `GET /app/fx`
  * @param assets 贴图前缀与清单（页面加载完先预加载）
- * @param stages 取两只现在的舞台（`[自家, 对手]`；没有对手时那一项是 null）
+ * @param stages 取现在的舞台（`[自家, 对手]` 是 1v1 的传法；群架传 N 只，顺序按编号）
  * @param workArea 取夹进去的工作区（按自家宠物所在的那块屏）
  * @param warn 窗口没开成 / 页面没加载好：只打第一次的一行日志
  * @param options.foeShadow 对手是心魔：它放出来的（`who` = 1）用心魔的配色画
@@ -505,16 +529,22 @@ export function openFxWindow(
   electron: FxElectron,
   pageUrl: string,
   assets: FxAssets,
-  stages: () => [Stage | null, Stage | null],
+  stages: () => readonly (Stage | null)[],
   workArea: () => Rect,
   warn: (message: string) => void,
   options: { foeShadow?: boolean } = {},
 ): FxWindow {
-  const first = fxBounds(stages()[0], stages()[1], workArea());
+  const first = fxBoundsAll(stages(), workArea());
   if (!first) {
     // 连窗口都摆不了（还没收到自家宠物的位置）：这一场没有特效层，其余照常
     warn('特效：还不知道宠物在哪，这一场不放特效');
-    return { fire: () => undefined, place: () => undefined, close: () => undefined, pin: () => undefined };
+    return {
+      fire: () => undefined,
+      fireAt: () => undefined,
+      place: () => undefined,
+      close: () => undefined,
+      pin: () => undefined,
+    };
   }
   let bounds = first;
   const win = new electron.BrowserWindow({
@@ -587,17 +617,34 @@ export function openFxWindow(
     });
   return {
     fire(shot, who) {
+      const all = stages();
       if (!pinned) {
-        const next = fxBounds(stages()[0], stages()[1], workArea());
+        const next = fxBoundsAll(all, workArea());
         if (next) move(next);
       }
-      const spec = fxSpec(shot, who, stages(), bounds, options.foeShadow === true && who === 1);
+      const spec = fxSpecBetween(
+        shot,
+        all[who] ?? null,
+        all[(who ^ 1) as 0 | 1] ?? null,
+        bounds,
+        options.foeShadow === true && who === 1,
+      );
+      if (!spec) return;
+      run(`fx.fire(${JSON.stringify(spec)})`);
+    },
+    fireAt(shot, from, to) {
+      const all = stages();
+      if (!pinned) {
+        const next = fxBoundsAll(all, workArea());
+        if (next) move(next);
+      }
+      const spec = fxSpecBetween(shot, all[from] ?? null, all[to] ?? null, bounds);
       if (!spec) return;
       run(`fx.fire(${JSON.stringify(spec)})`);
     },
     place() {
       if (pinned) return;
-      const next = fxBounds(stages()[0], stages()[1], workArea());
+      const next = fxBoundsAll(stages(), workArea());
       if (next) move(next);
     },
     pin(on) {

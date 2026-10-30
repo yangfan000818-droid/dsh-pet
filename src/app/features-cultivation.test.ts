@@ -589,6 +589,21 @@ test('修炼关掉时没有「心魔试炼」这一项', async () => {
   await withFeatures({ config }, async (_features, _said, _bodies, _home, { menus }) => {
     await until(() => menus.length > 0);
     assert.ok(menus.every((labels) => !labels.includes('修炼/心魔试炼')));
+    // 群架要用修炼存档里的 Fighter，修炼关着就一起收起来
+    assert.ok(menus.every((labels) => labels.every((label) => !label.startsWith('群架/'))));
+  });
+});
+
+test('群架：修炼开着时菜单里「群架」分组下挂 3 / 4 / 5 人三项', async () => {
+  await withFeatures({}, async (_features, _said, _bodies, _home, { menus }) => {
+    await until(
+      () => menus.some((labels) => labels.includes('群架/3 人')),
+      '群架菜单项',
+    );
+    const tail = last(menus)!;
+    for (const n of [3, 4, 5]) assert.ok(tail.includes(`群架/${n} 人`), JSON.stringify(tail));
+    // 根菜单只占一项「群架」，人数都在它下面（不各占一个根菜单按钮）
+    assert.equal(tail.some((label) => label.startsWith('群架·')), false, JSON.stringify(tail));
   });
 });
 

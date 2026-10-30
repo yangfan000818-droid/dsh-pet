@@ -18,6 +18,7 @@ export interface Menu {
 
 export function createMenu(ctx: FeatureContext): Menu {
   const {
+    brawlActions,
     cultivationActions,
     duelChallengeActions,
     lookAtScreen,
@@ -38,6 +39,9 @@ export function createMenu(ctx: FeatureContext): Menu {
       MENU_LOOK,
       MENU_DIARY,
       ...cultivationActions().keys(),
+      // 群架（X27）还在本地演示阶段：先排在串门项前面，方便真机看 3/4/5 人的围圈；
+      // B4 接上联机、定下入口位置后再挪到切磋那一档
+      ...brawlActions().keys(),
       ...visitActions().keys(),
       // 隔空切磋的挑战项排在串门项之后：菜单挤不下时先截掉它们（X15）
       ...duelChallengeActions().keys(),
@@ -75,7 +79,11 @@ export function createMenu(ctx: FeatureContext): Menu {
     } else if (label === MENU_DIARY) {
       await openDiary(now);
     } else {
-      const action = cultivationActions().get(label) ?? visitActions().get(label) ?? duelChallengeActions().get(label);
+      const action =
+        cultivationActions().get(label) ??
+        brawlActions().get(label) ??
+        visitActions().get(label) ??
+        duelChallengeActions().get(label);
       if (action) await action();
       // 菜单弹出后邻居走了
       else if (label.startsWith(`${MENU_VISIT_GROUP}/去 `)) await say('它好像已经不在附近了～');

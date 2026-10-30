@@ -44,6 +44,7 @@ import { createNoteOpener } from './note-window';
 import { loadVisitIdentity, resetVisitIdentity } from './visit-identity';
 import { watchHomePet } from './visit-windows';
 import { createAdventureGlue } from './features/adventure-glue';
+import { createBrawl } from './features/brawl';
 import type { AppFeatures, FeatureContext, FeatureDeps, FeatureState, FeatureFunctions } from './features/context';
 import { createDiaryGlue } from './features/diary-glue';
 import { createDuel } from './features/duel';
@@ -155,6 +156,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
   Object.assign(fns, createTrial(ctx));
   Object.assign(fns, createSpar(ctx));
   Object.assign(fns, createDuel(ctx));
+  Object.assign(fns, createBrawl(ctx));
   Object.assign(fns, createVisiting(ctx));
   Object.assign(fns, createVisitingChat(ctx));
   Object.assign(fns, createVisitingMenu(ctx));

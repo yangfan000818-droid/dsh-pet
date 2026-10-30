@@ -50,7 +50,7 @@ export interface WeaponDef {
   twinChance: number;
 }
 
-const weapon = (
+export const weapon = (
   id: WeaponId,
   name: string,
   grade: WeaponDef['grade'],
@@ -133,7 +133,7 @@ export interface SkillDef {
   kind: '被动' | '主动';
 }
 
-const skill = (id: SkillId, name: string, kind: SkillDef['kind']): SkillDef => ({
+export const skill = (id: SkillId, name: string, kind: SkillDef['kind']): SkillDef => ({
   id,
   name,
   kind,
@@ -212,7 +212,7 @@ export interface MoveDef {
   packHits?: boolean;
 }
 
-const move = (id: MoveId, name: string, min: number, max: number, extra: Partial<MoveDef> = {}): MoveDef => ({
+export const move = (id: MoveId, name: string, min: number, max: number, extra: Partial<MoveDef> = {}): MoveDef => ({
   id,
   name,
   min,
@@ -272,7 +272,7 @@ export const SPAR_MAX_HIT_SHARE = 0.3;
 export const SPAR_ACTIVE_LIMIT = 3;
 
 /** 主动招式（Action 里允许出现的） */
-const ACTIVE_SKILLS: readonly SkillId[] = [
+export const ACTIVE_SKILLS: readonly SkillId[] = [
   'bloom',
   'lion-roar',
   'blue-whale',
@@ -304,7 +304,7 @@ const ACTIVE_SKILLS: readonly SkillId[] = [
  * 切磋里要继续判命中（`dodgeRate`）的主动技（X26 §3.2）：伤害 / 控制、指定对方的效果。
  * 自增益（凭空生花、万我、逆流护身印、深渊领域、瞬影、聚气起手）与延迟触发的招牌招不在这一档。
  */
-const SPAR_DODGE_SKILLS: readonly SkillId[] = [
+export const SPAR_DODGE_SKILLS: readonly SkillId[] = [
   'lion-roar',
   'blue-whale',
   'whale-song',
@@ -327,7 +327,7 @@ const SPAR_DODGE_SKILLS: readonly SkillId[] = [
  * 延迟触发的招牌伤害（鲸派气功释放、古人补击、鬼敲门那一击）走各自路径，本来就不判闪避。
  * 它们仍然固定抽一次命中随机数（见 `takeAction`），换招不会无意义地挪动后续结算序列。
  */
-const SPAR_SURE_SKILLS: readonly SkillId[] = ['blue-whale', 'finger-sword', 'headless-shadow'];
+export const SPAR_SURE_SKILLS: readonly SkillId[] = ['blue-whale', 'finger-sword', 'headless-shadow'];
 
 export interface Fighter {
   name: string; // 显示用
@@ -509,7 +509,7 @@ export type BattleEvent =
     };
 
 /** 一个小 PRNG（sfc32），种子取 sha256 摘要的前 16 字节，不引依赖 */
-function sfc32(seed: Buffer): () => number {
+export function sfc32(seed: Buffer): () => number {
   let a = seed.readUInt32LE(0) | 0;
   let b = seed.readUInt32LE(4) | 0;
   let c = seed.readUInt32LE(8) | 0;
@@ -543,7 +543,7 @@ export function majorBreaks(stage: number): number {
   return stage < 9 ? 0 : 1 + Math.floor((stage - 9) / 3);
 }
 
-function pick<T>(rng: () => number, items: readonly T[]): T {
+export function pick<T>(rng: () => number, items: readonly T[]): T {
   return items[Math.floor(rng() * items.length)];
 }
 
@@ -551,18 +551,18 @@ function pick<T>(rng: () => number, items: readonly T[]): T {
  * 被动是否还生效（X22 鬼画）：招式在身，且没被本场封掉（`sealedPassive`）。
  * 所有被动判定都走这里；`sealedPassive` 为空时逐条等价于原来的 `f.skills.includes(id)`。
  */
-function hasSkill(side: { f: Fighter; sealedPassive: SkillId | null }, id: SkillId): boolean {
+export function hasSkill(side: { f: Fighter; sealedPassive: SkillId | null }, id: SkillId): boolean {
   return side.f.skills.includes(id) && side.sealedPassive !== id;
 }
 
 /** 闪避率 = min(35%, 身法 × 1.5% + 化鸽遁 8% + 加持的闪避加成（Y0，上限照旧）) */
-function dodgeRate(side: Side): number {
+export function dodgeRate(side: Side): number {
   const f = side.f;
   return Math.min(0.35, f.agility * 0.015 + (hasSkill(side, 'dove') ? 0.08 : 0) + (f.mods?.dodge ?? 0));
 }
 
 /** 背水一战（Y0）：气血低于三成的伤害倍率，不带 mods 的一方恒为 1（不改变原来的结算） */
-function desperateFactor(f: Fighter, hp: number): number {
+export function desperateFactor(f: Fighter, hp: number): number {
   const mult = f.mods?.desperate;
   return mult !== undefined && hp * 10 < f.hp * 3 ? mult : 1;
 }
@@ -616,7 +616,7 @@ export function fairSparPair(a: Fighter, b: Fighter, keep = 0): [Fighter, Fighte
   ];
 }
 
-interface Side {
+export interface Side {
   f: Fighter;
   hp: number;
   /** 下次出手时刻（时间轴） */
@@ -662,7 +662,7 @@ interface Side {
   skillUses: number;
 }
 
-function makeSide(f: Fighter, initialDelay: number): Side {
+export function makeSide(f: Fighter, initialDelay: number): Side {
   const side: Side = {
     f,
     hp: startingHp(f),
@@ -694,11 +694,11 @@ function makeSide(f: Fighter, initialDelay: number): Side {
   return side;
 }
 
-function intervalOf(s: Side): number {
+export function intervalOf(s: Side): number {
   return 100 / (s.f.speed + 10);
 }
 
-function hpPair(a: Side, b: Side): [number, number] {
+export function hpPair(a: Side, b: Side): [number, number] {
   return [a.hp, b.hp];
 }
 
@@ -707,7 +707,7 @@ function hpPair(a: Side, b: Side): [number, number] {
  * `pierce`（X9 的五指拳心剑）：穿护体——不消耗泡泡、也不打折。
  * `noPlayDead`（X22 无头鬼影）：这一下打死了就真死了，假死遁也救不回来。
  */
-function applyDamage(
+export function applyDamage(
   target: Side,
   raw: number,
   opts: { pierce?: boolean; noPlayDead?: boolean } = {},
@@ -743,7 +743,7 @@ function applyDamage(
  * 一次出手（法宝或招式）的结算口径。把 `WeaponDef` 和 `MoveDef` 收成同一张形状，
  * attack() 里只认这些字段（法宝另有 slow / returnSure / twinChance，招式没有 = 不生效）。
  */
-interface AttackSpec {
+export interface AttackSpec {
   id: WeaponId | MoveId;
   /** 招式表里的招（事件里记 `move` 而不是 `weapon`） */
   isMove: boolean;
@@ -762,7 +762,7 @@ interface AttackSpec {
   twinChance: number;
 }
 
-function specOf(action: Extract<Action, { kind: 'weapon' | 'move' }>, pack: number | undefined): AttackSpec {
+export function specOf(action: Extract<Action, { kind: 'weapon' | 'move' }>, pack: number | undefined): AttackSpec {
   if (action.kind === 'weapon') {
     const w = WEAPONS[action.weapon];
     return {
@@ -915,9 +915,9 @@ export function fallbackAction(view: BattleView, seed: string, index: number): A
   return autoController(rngFrom(`${seed}:fallback:${index}`)).decide(view);
 }
 /** 基础会心率（会心一击的持有者是 CRIT_SKILL_CHANCE） */
-const BASE_CRIT = 0.08;
+export const BASE_CRIT = 0.08;
 /** 灵力对伤害的加成比例（整段出手合计） */
-const POWER_FACTOR = 0.75;
+export const POWER_FACTOR = 0.75;
 /**
  * 渡劫：单道天雷伤害 ≈ 典型气血 ÷ 雷数 ×（TRIBULATION_BASE + 境界 × TRIBULATION_STEP）。
  * X4 落地后按正式成长（fighterAt 同口径）对七个渡劫分界重标过（2026-10-25）：
@@ -931,37 +931,37 @@ const POWER_FACTOR = 0.75;
  * stage 20 不吃丹掉到 0.543（下限 0.55）；炼虚往上的附加斜率再放到 -0.0112，
  * 现值为 0.47 / 0.0198 / -0.0112 / 0.368，七站不吃丹 0.553–0.668、吃丹 0.863–0.902。
  */
-const TRIBULATION_BASE = 0.47;
-const TRIBULATION_STEP = 0.0198;
+export const TRIBULATION_BASE = 0.47;
+export const TRIBULATION_STEP = 0.0198;
 /** 炼虚往上的附加斜率（X16 起为负，X22 再放到 -0.0112）：技能攒得全，单道雷随境界涨得慢一些 */
-const TRIBULATION_LATE_STEP = -0.0112;
+export const TRIBULATION_LATE_STEP = -0.0112;
 /** 渡劫：单道雷按渡劫者自身气血加成的比例（吃丹加的血也走这里，丹的收益不至于陡成必过） */
-const TRIBULATION_HP_CUT = 0.368;
+export const TRIBULATION_HP_CUT = 0.368;
 /** 破势：伤害里随防守方气血上限加成的比例 */
-const HP_BONUS = 0.25;
-const CRIT_SKILL_CHANCE = 0.18;
+export const HP_BONUS = 0.25;
+export const CRIT_SKILL_CHANCE = 0.18;
 /** 狮子吼伤害里吃的破势份额（蓝鲸吃整份） */
-const LION_HP_SHARE = 0.6;
+export const LION_HP_SHARE = 0.6;
 /** 狮子吼的伤害基数（X20 从 15 提到 22：控制改成有几率以后，这一招不能比普通攻击还弱） */
-const LION_BASE = 22;
+export const LION_BASE = 22;
 /** 蓝鲸现世在切磋里的额外收束（X23）：原式 34 + 灵力 + 整份破势，缩放后仍常顶满 30% 单次封顶 */
-const BLUE_WHALE_SPAR_SHARE = 0.75;
+export const BLUE_WHALE_SPAR_SHARE = 0.75;
 
 /** 泡泡护体挡伤后剩下的比例（§平衡：X20 从 0.55 提到 0.78，把这一招的持有优势收回 0.6 以内） */
-const BUBBLE_FACTOR = 0.78;
+export const BUBBLE_FACTOR = 0.78;
 /** 第六感的反击概率（§平衡；X20 从 0.28 提到 0.45） */
-const SIXTH_SENSE_CHANCE = 0.45;
+export const SIXTH_SENSE_CHANCE = 0.45;
 /**
  * 控制（让对方跳过下一次出手）的命中判定（X20 平衡）。以前狮子吼 / 鲸歌 / 魂牵梦绕 / 送友风
  * 都是无条件生效，手动出招时先出手的一方把四招连着放，对面一拍都出不了，谁先手谁赢；
  * 现在改成：基础几率 + 灵力压身法（每差 1 点 2%），夹在 25%–85%。
  * 另外刚被控过、还没出手的一方一律控不住（`Side.controlled`）——最多控一拍、放一拍，连不成锁。
  */
-const CONTROL_POWER_STEP = 0.02;
-const CONTROL_MIN = 0.25;
-const CONTROL_MAX = 0.85;
+export const CONTROL_POWER_STEP = 0.02;
+export const CONTROL_MIN = 0.25;
+export const CONTROL_MAX = 0.85;
 /** 几个控制招式的基础几率：狮子吼、鲸歌、魂牵梦绕、送友风都先出伤害，再判这一下控不控得住 */
-const CONTROL_BASE: Partial<Record<SkillId, number>> = {
+export const CONTROL_BASE: Partial<Record<SkillId, number>> = {
   'lion-roar': 0.6,
   'whale-song': 0.75,
   'dream-chant': 0.55,
@@ -969,39 +969,39 @@ const CONTROL_BASE: Partial<Record<SkillId, number>> = {
 };
 
 /** 连击：同一回合最多再补这么次数 */
-const MAX_COMBOS = 2;
+export const MAX_COMBOS = 2;
 /** 墨汁糊眼：dodgeRoll 落在这以上就打空（五成半） */
-const BLIND_MISS_FROM = 0.45;
+export const BLIND_MISS_FROM = 0.45;
 /** 墨汁糊眼管几次出手 */
-const INK_TURNS = 3;
+export const INK_TURNS = 3;
 /** 水母分身：counterRoll 落在这以上就打在分身上（一成） */
-const DECOY_FROM = 0.9;
+export const DECOY_FROM = 0.9;
 /** 鸡毛掸子：对方下次出手往后推的比例（出手间隔的一半 → X20 收到 0.35） */
-const SLOW_FACTOR = 0.35;
+export const SLOW_FACTOR = 0.35;
 /** 重（鲸尾 / 扑击）：出手间隔的倍数（X20 从 1.2 收到 1.15） */
-const HEAVY_FACTOR = 1.15;
+export const HEAVY_FACTOR = 1.15;
 /** 鲸吞伤害里吃的破势份额 */
-const GULP_HP_SHARE = 0.5;
+export const GULP_HP_SHARE = 0.5;
 /**
  * 魂牵梦绕伤害里吃的破势份额（X9）。起点是 20 + 破势×0.8，实测持有方胜率 0.70（上限 0.65）——
  * 大伤害＋入梦（白送一拍）叠在一起太强，按扫描降到 14 + 破势×0.5，落在 0.61。
  */
-const CHANT_HP_SHARE = 0.5;
+export const CHANT_HP_SHARE = 0.5;
 /** 五指拳心剑伤害里吃的破势份额（X9） */
-const FIST_HP_SHARE = 0.8;
+export const FIST_HP_SHARE = 0.8;
 /** 万我：分出几重魂影（X9；用户选了 3 重，再往上就是「七重战神」） */
-const MYRIAD_MIRRORS = 3;
+export const MYRIAD_MIRRORS = 3;
 /** 鲸歌（X20）：几声低吟带着灵压，伤害基数、灵力与破势份额 */
-const WHALE_SONG_BASE = 16;
-const WHALE_SONG_HP_SHARE = 0.3;
+export const WHALE_SONG_BASE = 16;
+export const WHALE_SONG_HP_SHARE = 0.3;
 /** 降龙十八掌（X16）：必中伤害基数、吃的破势份额、后劲的固定与灵力份额；X20 基数 15→28、后劲 4→10 */
-const DRAGON_PALM_BASE = 28;
-const DRAGON_PALM_HP_SHARE = 0.6;
-const DRAGON_SURGE_BASE = 10;
-const DRAGON_SURGE_POWER = 0.25;
+export const DRAGON_PALM_BASE = 28;
+export const DRAGON_PALM_HP_SHARE = 0.6;
+export const DRAGON_SURGE_BASE = 10;
+export const DRAGON_SURGE_POWER = 0.25;
 /** 送友风（X16）：必中伤害基数、吃的破势份额；X20 基数 12→18 */
-const FAREWELL_BASE = 18;
-const FAREWELL_HP_SHARE = 0.4;
+export const FAREWELL_BASE = 18;
+export const FAREWELL_HP_SHARE = 0.4;
 /**
  * 串门切磋里送友风打中后把对方送走的概率（X16）。起点 0.3；battle-sim 的「送友风（串门）」
  * 超过 0.65 就往下调（数值记在 X16 的落地情况里）。
@@ -1011,26 +1011,26 @@ export const FAREWELL_SEND_CHANCE = 0.3;
 /**
  * 万我大手印（X21）：必中伤害的基数和吃的破势份额
  */
-const PALM_BASE = 26;
-const PALM_HP_SHARE = 0.5;
+export const PALM_BASE = 26;
+export const PALM_HP_SHARE = 0.5;
 /**
  * 逆流护身印（X21）：弹几次、每次弹回原伤害的几成。
  * 起点 2 次一轮实测 0.77（上限 0.61），照任务书先降到 1 次，落到 0.52。
  */
-const REVERSAL_TIMES = 1;
-const REVERSAL_SHARE = 0.7;
+export const REVERSAL_TIMES = 1;
+export const REVERSAL_SHARE = 0.7;
 /**
  * 前有古人（X21）：古人补的那一击（必中）。任务书写 22，但这一步本身不造成伤害，
  * 白搭一手只补 22 实测只有 0.34（下限 0.44）——引擎每一次出手都在 40 上下，补一击要抵得上一手才不亏，调到 80 后 0.48。
  */
-const ANCIENT_BASE = 80;
+export const ANCIENT_BASE = 80;
 /**
  * 吃苦吃亏（X21）：吃掉泡泡 / 魂影时各回多少上限血；都没得吃就咬一口的基数。
  * 任务书写 14，实测 0.36（下限 0.44）；咬一口也得贴近一手普通攻击，调到 40 后 0.48。
  */
-const EAT_HEAL = 0.15;
-const EAT_MIRROR_HEAL = 0.12;
-const EAT_BITE_BASE = 40;
+export const EAT_HEAL = 0.15;
+export const EAT_MIRROR_HEAL = 0.12;
+export const EAT_BITE_BASE = 40;
 
 /**
  * 鬼手 / 无头鬼影 / 鬼敲门 / 鬼画 / 鬼血（X22）：伤害基数与份额。起点照任务书 §X22；
@@ -1039,28 +1039,28 @@ const EAT_BITE_BASE = 40;
  * 鬼手 20→38、鬼敲门 20→60（破势 0.3→0.5）、鬼画 16→77（灵力 0.4→0.75）、鬼血 14→50（灵力 0.5→0.75）。
  * 调后六门 0.454–0.510，泡泡护体 0.600（上限 0.61）。
  */
-const HAND_BASE = 38;
-const HAND_HP_SHARE = 0.4;
-const SHADOW_BASE = 30;
-const SHADOW_HP_SHARE = 0.4;
-const KNOCK_BASE = 60;
-const KNOCK_HP_SHARE = 0.5;
-const PAINT_BASE = 77;
-const PAINT_POWER = 0.75;
-const BLOOD_BASE = 50;
-const BLOOD_POWER = 0.75;
-const BLOOD_PER_PASSIVE = 4;
+export const HAND_BASE = 38;
+export const HAND_HP_SHARE = 0.4;
+export const SHADOW_BASE = 30;
+export const SHADOW_HP_SHARE = 0.4;
+export const KNOCK_BASE = 60;
+export const KNOCK_HP_SHARE = 0.5;
+export const PAINT_BASE = 77;
+export const PAINT_POWER = 0.75;
+export const BLOOD_BASE = 50;
+export const BLOOD_POWER = 0.75;
+export const BLOOD_PER_PASSIVE = 4;
 
 /**
  * 鲸派气功 / 深渊领域 / 瞬影（X25）：任务书 §2 的规则，数值按 battle-sim 收进 44%–61% 平衡带。
  * 鲸派气功伤害 = 基数 + 灵力×0.75 + 对方气血上限×0.15；聚气期间自己挨打 ×0.7。
  * 深渊领域持续三次自己的攻击，对方每次真正出手前吃 15 点；瞬影不需要数值。
  */
-const TIDE_BASE = 58;
-const TIDE_HP_SHARE = 0.6;
-const CHARGE_GUARD = 0.7;
-const FIELD_TURNS = 3;
-const FIELD_TICK = 15;
+export const TIDE_BASE = 58;
+export const TIDE_HP_SHARE = 0.6;
+export const CHARGE_GUARD = 0.7;
+export const FIELD_TURNS = 3;
+export const FIELD_TICK = 15;
 
 /** 一场对战的额外开关（X16）：`farewell` 只在串门切磋里传，隔空 / 心魔 / 秘境 / 渡劫都不传 */
 export interface FightOptions {
@@ -1131,7 +1131,7 @@ export function fightUntilDecision(
   return { events, need: null };
 }
 
-function runFight(
+export function runFight(
   a: Fighter,
   b: Fighter,
   seed: string,
@@ -1937,7 +1937,7 @@ function runFight(
   return events;
 }
 
-function randBetween(roll: number, min: number, max: number): number {
+export function randBetween(roll: number, min: number, max: number): number {
   return min + Math.floor(roll * (max - min + 1));
 }
 

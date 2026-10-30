@@ -12,8 +12,10 @@ import {
   feetPoint,
   foeStage,
   fxBounds,
+  fxBoundsAll,
   fxPage,
   fxSpec,
+  fxSpecBetween,
   handPoint,
   homeStage,
   openFxWindow,
@@ -68,6 +70,25 @@ test('fxBounds：两只舞台的并集，上方让出 3/4 个舞台高、左右�
   assert.ok(tight && tight.x >= 0 && tight.y >= 25, `夹进工作区：${JSON.stringify(tight)}`);
   assert.deepEqual(fxBounds(self, null, everywhere), { x: 76, y: 30, width: 688, height: 654 }, '渡劫只有自家');
   assert.equal(fxBounds(null, null, everywhere), null, '谁都不知道在哪：这一场不放特效');
+});
+
+test('fxBoundsAll：N 只舞台的并集覆盖整圈', () => {
+  const third: Stage = { x: 1500, y: 600, width: 320, height: 180, facing: 'right' };
+  const all = fxBoundsAll([self, foe, third], everywhere);
+  assert.ok(all);
+  assert.equal(all.x, self.x - 24);
+  assert.equal(all.x + all.width, 1500 + 320 + 24);
+  assert.equal(all.y + all.height, 600 + 180 + 24);
+  assert.equal(fxBoundsAll([null, null], everywhere), null);
+});
+
+test('fxSpecBetween：任意两只，谁打谁由 from/to 决定', () => {
+  const forward = fxSpecBetween(shot(), self, foe, everywhere) as FxSpec;
+  const backward = fxSpecBetween(shot(), foe, self, everywhere) as FxSpec;
+  assert.equal(forward.mirror, true, '往右打要镜像');
+  assert.equal(backward.mirror, false, '往左打不用镜像');
+  assert.notDeepEqual(forward.from, backward.from);
+  assert.deepEqual(fxSpec(shot(), 0, stages, everywhere), forward, '1v1 的 0 号入口等价于 from=self');
 });
 
 test('fxSpec 静止贴图（X24）：白袍铺在自己身上、门立在两只中间、符纹贴在对方身上', () => {

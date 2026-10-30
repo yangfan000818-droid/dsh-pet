@@ -74,7 +74,7 @@ export const RELAY_OPACITY = 0.9;
 /** 客人窗口宽度占自家宠物宽度的比例（客人小一号） */
 const GUEST_SCALE = 0.7;
 /** 客人窗口里，宠物上方留给气泡的高度 */
-const BUBBLE_ROOM = 96;
+export const BUBBLE_ROOM = 96;
 /** 名牌的余量：tag 负 margin 精确抵消透明边后净占 0，这里只留字体行高的溢出余量（擂台算客人头顶也用它） */
 export const GUEST_TAG_ROOM = 6;
 /** 看光标在不在客人身上的间隔 */

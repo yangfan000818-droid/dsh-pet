@@ -506,6 +506,9 @@ export interface FeatureFunctions {
   runHostSparShow(visitor: Visitor, state: SparState, guestNonce: string, guestLine: string): Promise<void>;
   duelChallengeActions(): Map<string, () => unknown>;
   answerDuel(accept: boolean): Promise<void>;
+  /** 群架（X27）：「修炼」子菜单里的 3 / 4 / 5 人演示项 */
+  brawlActions(): Map<string, () => unknown>;
+  runBrawlDemo(count?: number): Promise<void>;
   wantedLabels(): string[];
   refreshMenu(force?: boolean): Promise<void>;
   pollMenu(): Promise<void>;

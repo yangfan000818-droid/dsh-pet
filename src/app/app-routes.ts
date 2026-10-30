@@ -23,6 +23,7 @@ import { saveAppConfig } from './app-config';
 import { adventurePage } from './adventure-window';
 import { panelPage } from './action-panel-window';
 import { arenaPage } from './arena-window';
+import { brawlArenaPage } from './brawl-arena';
 import type { AppConfig } from './app-config';
 import type { AppFeatures } from './features';
 import { notePage } from './note-window';
@@ -99,7 +100,8 @@ async function handle(
     pathname === '/app/note' ||
     pathname === '/app/arena' ||
     pathname === '/app/fx' ||
-    pathname === '/app/panel'
+    pathname === '/app/panel' ||
+    pathname === '/app/brawl-arena'
   ) {
     if (method !== 'GET') return send(res, 405, { error: '仅支持 GET' });
     const page =
@@ -115,7 +117,9 @@ async function handle(
                 ? arenaPage
                 : pathname === '/app/panel'
                   ? panelPage
-                  : fxPage;
+                  : pathname === '/app/brawl-arena'
+                    ? brawlArenaPage
+                    : fxPage;
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-length': Buffer.byteLength(page),
