@@ -37,7 +37,8 @@
   - 这一手不再做别的动作，`takeAction` 直接返回这个 action。
 - 释放前被鬼敲门等打死的，自然没有释放。
 
-常量（放 `battle.ts` 现有常量区）：`TIDE_BASE = 56`、`TIDE_HP_SHARE = 0.6`、`CHARGE_GUARD = 0.7`。
+常量（放 `battle.ts` 现有常量区）：`TIDE_BASE = 58`、`TIDE_HP_SHARE = 0.6`、`CHARGE_GUARD = 0.7`
+（任务书原写 56，X25-A 收尾按 `battle-sim` 收进 44%–61% 时调到 58）。
 
 ### 2.2 深渊领域（领域）
 
@@ -50,7 +51,8 @@
 - 自己的**每一次攻击**（`attack` 正常走完、有出手的）之后 `me.field -= 1`。放非攻击的招（回血等）、被控跳过都不减。
 - 领域不叠加：再放一次也只重置成 `FIELD_TURNS`（同一场也只能放一次，实际不会发生）。
 
-常量：`FIELD_TURNS = 2`、`FIELD_TICK = 5`。
+常量：`FIELD_TURNS = 3`、`FIELD_TICK = 15`
+（任务书原写 2 / 5，X25-A 收尾按 `battle-sim` 收进平衡带时调大——领域期间三次攻击必中，暗流三次共 45）。
 
 ### 2.3 瞬影（闪避 + 必中）
 
@@ -80,27 +82,31 @@
 按现有顺序插在合适的优先级（都在 `unused` 过滤里）：
 
 - `tide-cannon`：对方气血 > 60% 时聚气。
-- `abyss-field`：对方有 `dove` 或 `sixth-sense`（能闪的配招）时展开。
+- `abyss-field`：开场无条件展开（压住对方的闪避，之后三次攻击必中）。
 - `shadow-step`：自己气血 < 50% 时用。
 
-## 5. 占位演出（X25-B 换成正式素材）
+## 5. 演出（X25-B 已接正式素材）
 
-- `ATTACK_SHOW`：`tide-cannon: { action: '出手-护身印' }`（聚气）、`abyss-field: { action: '出手-万我' }`、`shadow-step: { action: '战斗-闪避' }`。
+- `ATTACK_SHOW`：`tide-cannon: { action: '出手-聚气' }`、`abyss-field: { action: '出手-领域' }`、`shadow-step: { action: '出手-瞬影' }`。
+- `RELEASE`：`出手-鲸派`（1.83 秒、手位 [200, 199]）、`出手-领域`（2.17 秒按地、手位 [192, 268]）。
 - 时间线（`battle-show.ts`）：
   - `decide` 带 `autoRelease` 时**不**播动作（释放由下一步自己排），避免聚气动作闪一下又被顶掉。
-  - `skill === 'tide-cannon' && release`：在 `at` 播 `出手-降龙`，`at + releaseOffset('出手-降龙')` 放飞行物 `{ kind: '水浪', track: 'line', hitFx: '命中-水花' }`，命中那一刻排受击与台词。
-  - `skill === 'tide-cannon' && charging`、`skill === 'abyss-field'`、`skill === 'shadow-step'`、`field`：只刷台词与血条。
-  - `FX_ASSETS` 补上占位用的 `水浪`、`命中-水花`（不在出手表里时）。
-- 水浪 / 命中-水花 / 出手-降龙 / 出手-护身印 / 出手-万我 / 战斗-闪避 都是现成素材，**不要生成新素材**。
+  - `skill === 'tide-cannon' && release`：在 `at` 播 `出手-鲸派`，`at + releaseOffset('出手-鲸派')` 放飞行物 `{ kind: '鲸波', track: 'line', hitFx: '命中-水花' }`，命中那一刻排受击与台词。
+  - `skill === 'tide-cannon' && charging`：聚气动作压进一格（2.4 秒）演完，在 `cursor + SLOT_MS` 铺一张 `鲸息`（1.2 秒，掌间留一颗储气球），再刷台词。
+  - `skill === 'abyss-field'`：单掌按地那一刻（`cursor + releaseOffset('出手-领域')`）铺 `深渊符阵`（竖压 0.36 铺地、缓转 8°/秒）与 `深渊黑雾`，各留 18 秒（撑满自己三次攻击、约三个来回）。
+  - `field`：对方每次出手前压一下 `深渊黑雾`（`anchor: 'foe'`，0.9 秒，抖 3px）；`at` 早于上一格演完时压到 `cursor + SLOT_MS`。
+  - `shadow-step`：只播动作与台词（残影画在素材里），不加特效。
+  - `FX_ASSETS` 补上 `鲸息`、`鲸波`、`深渊符阵`、`深渊黑雾`。
+- 静止贴图的竖压扁：`Shot.hold.squash`（X25 新增，1 = 不压），`fx-window.ts` 的 `holdSpec` 与页面 `place()` 透传。
 
 ## 6. 测试
 
 - `battle.test.ts`：
   - 蓄力：聚气拍无伤且置 `charging`；下一拍自动释放、伤害落在公式上、`decide` 带 `autoRelease`；聚气期间受到的伤害 ×0.7；被控跳过一拍后仍释放；聚气期间被打死则没有释放。
-  - 领域：起手置位；对方出手前吃 `FIELD_TICK`；领域期间自己的攻击 `sure`（对方身法拉满也不闪）；两次攻击后领域消失。
+  - 领域：起手置位；对方出手前吃 `FIELD_TICK`；领域期间自己的攻击 `sure`（对方身法拉满也不闪）；三次攻击后领域消失。
   - 瞬影：起手后挨打只出 `dodge`、不掉血；必中攻击也不中；自己下一次攻击必中；放非攻击招不解散。
   - 三招都只出现一次（`used` 口径）。
-- `battle-show.test.ts`：三条时间线各一条——聚气只有台词、释放有动作 + 飞行物 + 受击、领域/瞬影只有台词。
+- `battle-show.test.ts`：四条时间线——聚气有动作 + 储气球、释放有动作 + 飞行物 + 受击、领域铺符阵与黑雾并逐次压黑雾、瞬影只有动作与台词。
 - 现有 1263 条测试全绿；有因为 `BATTLE_VERSION`、图鉴快照、`SKILL_IDS` 数量变化而必须改的断言，改的时候说明理由。
 - `battle-sim.mjs` 跑一遍，把改动前后的胜率表贴进回报（目标：各对位变化 ≤ 5 个百分点）。
 

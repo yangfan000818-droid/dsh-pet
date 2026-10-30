@@ -131,7 +131,7 @@ export interface FxSpec {
    * 静止贴图（X24）：不飞，就铺在 `from`（= `to`）那里 ms 毫秒，淡入淡出；`shake` 是左右抖动的像素，
    * `spin` 是慢慢转的速度（度 / 秒）。白袍、门、贴在身上的符纹用它
    */
-  hold?: { ms: number; shake: number; spin: number };
+  hold?: { ms: number; shake: number; spin: number; squash: number };
 }
 
 /**
@@ -197,6 +197,12 @@ const FX_SIZE: Record<FxAssetName, { size: number; spin?: number; grow?: number 
   门: { size: 0.78 },
   符画: { size: 0.5 },
   血珠: { size: 0.12 },
+  // X25：鲸息是掌间那颗水球（约身体高的一半），鲸波是横向水浪；
+  // 深渊符阵铺在两只脚下、深渊黑雾横着盖过擂台（静止贴图，大小按长边算）
+  鲸息: { size: 0.36 },
+  鲸波: { size: 0.9 },
+  深渊符阵: { size: 1.5 },
+  深渊黑雾: { size: 1.5 },
   // 历练（Y2）：一转蛊和对手招式的飞行物
   犬影: { size: 0.28 },
   纸鹤: { size: 0.18 },
@@ -327,7 +333,7 @@ function holdSpec(
     miss: false,
     pieces: [{ delay: 0, hue: 0 }],
     ...(shadow ? { shadow: true } : {}),
-    hold: { ms: hold.ms, shake: Math.round(hold.shake ?? 0), spin: hold.spin ?? 0 },
+    hold: { ms: hold.ms, shake: Math.round(hold.shake ?? 0), spin: hold.spin ?? 0, squash: hold.squash ?? 1 },
   };
 }
 
@@ -648,12 +654,13 @@ function piece(src, size, hue, shadow) {
   return node;
 }
 
-/** 写一帧：平移到中心点、镜像、转角、缩放（顺序见文件头的朝向说明） */
-function place(node, size, mirror, x, y, angle, scale, alpha) {
+/** 写一帧：平移到中心点、镜像、竖向压扁（俯视贴图铺地用）、转角、缩放（顺序见文件头的朝向说明） */
+function place(node, size, mirror, x, y, angle, scale, alpha, squash) {
   var half = size / 2;
   node.style.transform =
     'translate(' + (x - half).toFixed(1) + 'px,' + (y - half).toFixed(1) + 'px)' +
     ' scale(' + (mirror ? -1 : 1) + ',1)' +
+    (squash && squash !== 1 ? ' scale(1,' + squash.toFixed(3) + ')' : '') +
     ' rotate(' + angle.toFixed(4) + 'rad)' +
     ' scale(' + scale.toFixed(3) + ')';
   node.style.opacity = alpha.toFixed(3);
@@ -779,7 +786,7 @@ function loop(now) {
       var fadeOut = s.hold.ms - used < 220 ? Math.max(0, (s.hold.ms - used) / 220) : 1;
       var wobble = s.hold.shake ? Math.sin(used / 45) * s.hold.shake : 0;
       var held = s.hold.spin ? ((s.hold.spin * used) / 1000) * Math.PI / 180 : 0;
-      place(item.node, s.size, false, s.from[0] + wobble, s.from[1], held, 1, Math.min(fadeIn, fadeOut));
+      place(item.node, s.size, false, s.from[0] + wobble, s.from[1], held, 1, Math.min(fadeIn, fadeOut), s.hold.squash);
       if (used >= s.hold.ms) {
         item.node.remove();
         FX.items.splice(i, 1);
@@ -884,7 +891,12 @@ window.fx = {
             }
           : null,
         hold: spec.hold
-          ? { ms: Number(spec.hold.ms) || 0, shake: Number(spec.hold.shake) || 0, spin: Number(spec.hold.spin) || 0 }
+          ? {
+              ms: Number(spec.hold.ms) || 0,
+              shake: Number(spec.hold.shake) || 0,
+              spin: Number(spec.hold.spin) || 0,
+              squash: Number(spec.hold.squash) || 1,
+            }
           : null,
         from: [spec.from[0], spec.from[1]],
         to: [spec.to[0], spec.to[1]],

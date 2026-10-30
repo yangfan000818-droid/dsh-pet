@@ -771,7 +771,7 @@ export function autoController(rng: () => number): Controller {
         return { kind: 'skill', skill: 'eat-hardship' };
       // 逆流护身印（X21）：气血低于一半先撑起反弹
       if (unused.includes('reverse-seal') && hp * 2 < maxHp) return { kind: 'skill', skill: 'reverse-seal' };
-      // 瞬影（X25）：气血低于一半先用，把下一轮普通攻击全闪掉
+      // 瞬影（X25）：气血低于一半时先用，把下一轮普通攻击全闪掉，下一手必中
       if (unused.includes('shadow-step') && hp * 2 < maxHp) return { kind: 'skill', skill: 'shadow-step' };
       // 万我大手印（X21）：对方法宝多于两件时先把法宝攥住
       if (unused.includes('myriad-palm') && view.foe.weapons.length > 2) return { kind: 'skill', skill: 'myriad-palm' };
@@ -782,12 +782,8 @@ export function autoController(rng: () => number): Controller {
       if (unused.includes('headless-shadow') && foeHp * 10 < foeMax * 4)
         return { kind: 'skill', skill: 'headless-shadow' };
       if (unused.includes('ghost-knock') && foeHp * 10 > foeMax * 7) return { kind: 'skill', skill: 'ghost-knock' };
-      // 深渊领域（X25）：对方带化鸽遁 / 第六感这类能闪的配招时，先把闪避禁掉
-      if (
-        unused.includes('abyss-field') &&
-        (view.foe.skills.includes('dove') || view.foe.skills.includes('sixth-sense'))
-      )
-        return { kind: 'skill', skill: 'abyss-field' };
+      // 深渊领域（X25）：开场就展开，压住对方的闪避并让之后三次攻击必中
+      if (unused.includes('abyss-field')) return { kind: 'skill', skill: 'abyss-field' };
       // 鲸吞带回血：气血低于七成时先用
       if (unused.includes('whale-gulp') && hp * 10 < maxHp * 7) return { kind: 'skill', skill: 'whale-gulp' };
       // 五指拳心剑收人头（X9）：对方剩不到三成半就捅
@@ -1003,15 +999,15 @@ const BLOOD_POWER = 0.75;
 const BLOOD_PER_PASSIVE = 4;
 
 /**
- * 鲸派气功 / 深渊领域 / 瞬影（X25）：任务书 §2 的原语数值，先按规则跑通，平衡等 battle-sim 再看。
+ * 鲸派气功 / 深渊领域 / 瞬影（X25）：任务书 §2 的规则，数值按 battle-sim 收进 44%–61% 平衡带。
  * 鲸派气功伤害 = 基数 + 灵力×0.75 + 对方气血上限×0.15；聚气期间自己挨打 ×0.7。
- * 深渊领域持续两次自己的攻击，对方每次真正出手前吃 5 点；瞬影不需要数值。
+ * 深渊领域持续三次自己的攻击，对方每次真正出手前吃 15 点；瞬影不需要数值。
  */
-const TIDE_BASE = 56;
+const TIDE_BASE = 58;
 const TIDE_HP_SHARE = 0.6;
 const CHARGE_GUARD = 0.7;
-const FIELD_TURNS = 2;
-const FIELD_TICK = 5;
+const FIELD_TURNS = 3;
+const FIELD_TICK = 15;
 
 /** 一场对战的额外开关（X16）：`farewell` 只在串门切磋里传，隔空 / 心魔 / 秘境 / 渡劫都不传 */
 export interface FightOptions {

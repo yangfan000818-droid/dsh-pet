@@ -185,6 +185,11 @@ export type FxAssetName =
   | '门'
   | '符画'
   | '血珠'
+  // X25：鲸派气功的储气球、水浪，深渊领域的符阵与黑雾
+  | '鲸息'
+  | '鲸波'
+  | '深渊符阵'
+  | '深渊黑雾'
   // X8
   | '雪球'
   | '羽毛'
@@ -376,11 +381,11 @@ export const ATTACK_SHOW: Record<string, AttackShow> = {
   },
   // 回血：作用在自己身上，照旧播整段素材，没有飞行物
   bloom: { action: '招式-凭空生花' },
-  // X25 占位：正式素材留到 X25-B。聚气借用护身印的结印、领域借万我、瞬影借闪避；
-  // 鲸派气功的释放由时间线按 release 单独排「出手-降龙」+ 水浪
-  'tide-cannon': { action: '出手-护身印' },
-  'abyss-field': { action: '出手-万我' },
-  'shadow-step': { action: '战斗-闪避' },
+  // X25：聚气是双掌收在胸前凝出水球、领域是单掌按到地上、瞬影是留一个残影在原地；
+  // 鲸派气功的释放由时间线按 release 单独排「出手-鲸派」+ 鲸波
+  'tide-cannon': { action: '出手-聚气' },
+  'abyss-field': { action: '出手-领域' },
+  'shadow-step': { action: '出手-瞬影' },
   // 三种追加出手
   'spirit-beast': { action: '出手-召唤灵兽', fly: { kind: '灵兽', track: 'float', hitFx: '命中-泡泡' } },
   'sixth-sense': { action: '出手-第六感', fly: { kind: '手刀', track: 'line', hitFx: '命中-斩' } },
@@ -451,6 +456,12 @@ export const FX_ASSETS: FxAssetName[] = Array.from(
     // 静止贴图（X24）：白袍、门只在时间线里铺，不在出手表里，开窗时一并预取
     '逆流袍',
     '门',
+    // X25：聚气收势后的水球、领域的符阵与黑雾也只在时间线里铺
+    '鲸息',
+    '深渊符阵',
+    '深渊黑雾',
+    // 鲸派气功的水浪只在释放那一支里用，不在出手表里
+    '鲸波',
     // 定仙游的碧芒（Y2 素材清单）：不在出手表里，开窗时一并预取
     '碧光',
   ]),
@@ -527,6 +538,9 @@ export const RELEASE: Record<string, { ms: number; hand: [number, number]; catch
   '出手-敲门': { ms: 1_400, hand: [280, 200] },
   '出手-鬼画': { ms: 2_700, hand: [235, 236] },
   '出手-鬼血': { ms: 2_000, hand: [266, 228] },
+  // X25：鲸派双掌推到最远（1.83 秒，最左到 x=200）；领域单掌按到地上那一刻（2.17 秒，掌心在 x=192、y=268）
+  '出手-鲸派': { ms: 1_830, hand: [200, 199] },
+  '出手-领域': { ms: 2_170, hand: [192, 268] },
   // 对手动作（Y2）：离手时刻与手的位置按 YA 素材「量出来的时刻」填；熔岩鳄、他派蛊师复用狮獒 / 韩不留，
   // 调用方把它们的动画前缀传成被复用的那只
   '对手-野狗-出手': { ms: 1_833, hand: [0, 250] },
@@ -636,7 +650,15 @@ export interface Shot {
    * 逆流护身印的白袍、鬼敲门的门、贴在身上的符纹用它；`shake` 左右抖、`spin` 慢慢转，
    * `dy` 往下挪多少（占舞台高的比例，白袍要露出头，所以往下压一点）
    */
-  hold?: { ms: number; anchor?: 'self' | 'foe' | 'mid'; shake?: number; spin?: number; dy?: number };
+  hold?: {
+    ms: number;
+    anchor?: 'self' | 'foe' | 'mid';
+    shake?: number;
+    spin?: number;
+    dy?: number;
+    /** 竖向压扁（X25 的俯视符阵铺在地上用）：1 = 不压，0.4 左右像贴地 */
+    squash?: number;
+  };
 }
 
 /**
@@ -1343,10 +1365,18 @@ export function timeline(
       continue;
     }
 
-    // 鲸派气功释放（X25）：自动释放那一手没有 decide 动作，这里补「出手-降龙」+ 水浪，命中才掉血出台词
+    // 鲸派气功聚气（X25）：动作收势后把水球留在掌间——聚气动作压进一格 2.4 秒，素材里球到末帧就散了，
+    // 接一张鲸息标出「已聚气」，等下一次出手放出去
+    if (event.kind === 'skill' && event.skill === 'tide-cannon' && event.charging) {
+      pushHold(cursor + SLOT_MS, event.actor, '鲸息', event.hp, { ms: 1_200, anchor: 'self', dy: 0.12 });
+      if (line !== undefined) steps.push({ at, who: event.actor, line, hp: event.hp });
+      continue;
+    }
+
+    // 鲸派气功释放（X25）：自动释放那一手没有 decide 动作，这里补「出手-鲸派」+ 鲸波，命中才掉血出台词
     if (event.kind === 'skill' && event.skill === 'tide-cannon' && event.release) {
-      const anim = '出手-降龙';
-      const fly: Fly = { kind: '水浪', track: 'line', hitFx: '命中-水花' };
+      const anim = '出手-鲸派';
+      const fly: Fly = { kind: '鲸波', track: 'line', hitFx: '命中-水花' };
       pushAnim({ at, who: event.actor, anim, rate: actionRate(anim), hp: hpBefore });
       const impact = pushShot(at + releaseOffset(anim), event.actor, anim, fly, hpBefore);
       const victim = (event.actor ^ 1) as 0 | 1;
@@ -1434,6 +1464,32 @@ export function timeline(
       if (shot.reacts) pushReaction(shot.fly.reverse ? shot.launch : shot.impact, victim, reactAnim, hpBefore);
       // 掉血与结算台词都在命中那一刻（鲸吞的伤害和回血一起，在灵光飞回嘴边时结算）
       steps.push({ at: shot.impact, who: shooter, ...(line === undefined ? {} : { line }), hp: event.hp });
+      continue;
+    }
+
+    // 深渊领域（X25）：单掌按地那一刻，符阵从脚下铺开、黑雾漫上擂台；之后领域持续期间压在两只之间。
+    // 领域要撑到自己三次攻击打完（三个来回约 17 秒），贴图按这个时长留；战斗结束会随特效窗一起关掉
+    if (event.kind === 'skill' && event.skill === 'abyss-field') {
+      const spread = cursor + releaseOffset('出手-领域');
+      // 符阵是俯视图：竖向压扁到 0.36 铺在地上，别立成一堵圆墙
+      pushHold(spread, event.actor, '深渊符阵', event.hp, {
+        ms: 18_000,
+        anchor: 'mid',
+        dy: 0.27,
+        spin: 8,
+        squash: 0.36,
+      });
+      pushHold(spread, event.actor, '深渊黑雾', event.hp, { ms: 18_000, anchor: 'mid', dy: 0.3 });
+      if (line !== undefined) steps.push({ at, who: event.actor, line, hp: event.hp });
+      continue;
+    }
+
+    // 深渊领域的暗流（X25）：对方每次出手前被黑雾扯一下。引擎把暗流排在对方 decide 之前，
+    // 那时上一格还没关，按拍的 `at` 会落进上一段动作里——压到上一格演完（SLOT_MS）再压
+    if (event.kind === 'field') {
+      const tick = Math.max(at, cursor + SLOT_MS);
+      pushHold(tick, event.actor, '深渊黑雾', event.hp, { ms: 900, anchor: 'foe', dy: 0.12, shake: 3 });
+      steps.push({ at: tick, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
       continue;
     }
 

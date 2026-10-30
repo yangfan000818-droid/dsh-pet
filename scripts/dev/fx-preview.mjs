@@ -218,6 +218,40 @@ const SCENES = {
     events: [start, decide(0, weapon('water-gun')), whit(0, 'water-gun')],
     skillSets: [[], ['jelly-clone']],
   },
+  // X25：鲸派气功聚气与自动释放、深渊领域铺开与暗流、瞬影残影
+  鲸派气功聚气: {
+    events: [
+      start,
+      decide(0, skill('tide-cannon')),
+      { actor: 0, kind: 'skill', skill: 'tide-cannon', charging: true, hp },
+    ],
+  },
+  鲸派气功释放: {
+    events: [
+      start,
+      { actor: 0, kind: 'decide', action: skill('tide-cannon'), autoRelease: true, hp },
+      { actor: 0, kind: 'skill', skill: 'tide-cannon', release: true, damage: 86, hp: [100, 14] },
+    ],
+  },
+  深渊领域: {
+    events: [
+      start,
+      decide(0, skill('abyss-field')),
+      { actor: 0, kind: 'skill', skill: 'abyss-field', hp },
+      { actor: 0, kind: 'field', damage: 15, hp: [100, 85] },
+      decide(1, { kind: 'unarmed' }),
+      hit(1),
+    ],
+  },
+  瞬影: {
+    events: [
+      start,
+      decide(0, skill('shadow-step')),
+      { actor: 0, kind: 'skill', skill: 'shadow-step', hp },
+      decide(1, { kind: 'unarmed' }),
+      hit(1),
+    ],
+  },
   // X16：降龙十八掌冲过去打、再退回来；送友风把人吹得飘起来；串门里送走（客人整扇窗飘走）
   降龙十八掌: {
     events: [

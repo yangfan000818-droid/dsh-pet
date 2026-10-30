@@ -75,8 +75,18 @@ test('fxSpec 静止贴图（X24）：白袍铺在自己身上、门立在两只�
   assert.deepEqual(robe.from, robe.to, '不飞：起点就是终点');
   assert.deepEqual(robe.from, [421, 497], '自家身体中心（朝右时 x 镜像）');
   assert.equal(robe.size, Math.round(0.72 * 360));
-  assert.deepEqual(robe.hold, { ms: 2_600, shake: 0, spin: 0 });
+  assert.deepEqual(robe.hold, { ms: 2_600, shake: 0, spin: 0, squash: 1 });
   assert.equal(robe.hitSize, 0, '静止贴图不画命中特效');
+
+  // X25：俯视符阵要竖向压扁、往下挪到地上，才不会立成一堵圆墙
+  const field = fxSpec(
+    shot({ kind: '深渊符阵', hold: { ms: 5_000, anchor: 'mid', dy: 0.3, squash: 0.36 } }),
+    0,
+    stages,
+    everywhere,
+  ) as FxSpec;
+  assert.equal(field.hold?.squash, 0.36);
+  assert.equal(field.from[1], 497 + Math.round(0.3 * 360), 'dy 按舞台高往下挪');
 
   const door = fxSpec(
     shot({ kind: '门', hold: { ms: 2_200, anchor: 'mid', shake: 3 } }),

@@ -478,17 +478,6 @@ test('X20 切磋拉平：属性取中点，法宝和招式按少的一方取齐�
   assert.deepEqual(fairSparPair(x, y), [x, y]);
 });
 
-/**
- * X25 三原语（蓄力 / 领域 / 瞬影）：任务书 §2 把数值写死，AI 又只在触发条件下才用，
- * 持有方胜率不再落在旧招式那套 44%–61% 带（实测 0.438–0.468，见 battle-sim）。
- * 这里用更窄的实测带钉住它们，旧 29 门仍按 44%–61% 验；X25-B 调数值时再并回去。
- */
-const X25_PRIMITIVE_RATES: Partial<Record<SkillId, [number, number]>> = {
-  'tide-cannon': [0.43, 0.47],
-  'abyss-field': [0.42, 0.46],
-  'shadow-step': [0.45, 0.49],
-};
-
 test('平衡：任一法宝或招式，持有方胜率在 44%–61% 之间（X20 收紧）', () => {
   // 持有方把一个随机招 / 一件法宝换成待测项（而不是白多一份），量出来的才是它本身的分量
   for (const id of WEAPON_IDS) {
@@ -509,11 +498,6 @@ test('平衡：任一法宝或招式，持有方胜率在 44%–61% 之间（X20
       else a.skills = [id];
       return [a, fighterAt(10, seededRng(i + 500))];
     }, ITEM_BALANCE_N);
-    const primitive = X25_PRIMITIVE_RATES[id];
-    if (primitive) {
-      assert.ok(rate >= primitive[0] && rate <= primitive[1], `X25 原语 ${id} 实际 ${rate}`);
-      continue;
-    }
     assert.ok(rate >= 0.44 && rate <= 0.61, `招式 ${id} 实际 ${rate}`);
   }
 });
@@ -2149,8 +2133,8 @@ test('X25 鲸派气功：聚气拍无伤并置 charging，下一次真正出手�
   const release = events[releaseAt];
   assert.equal(
     release.kind === 'skill' ? release.damage : -1,
-    56 + Math.floor(a.power * 0.75) + Math.floor(b.hp * 0.25 * 0.6),
-    '释放按 56 + 灵力×0.75 + 对方气血上限×0.15',
+    58 + Math.floor(a.power * 0.75) + Math.floor(b.hp * 0.25 * 0.6),
+    '释放按 58 + 灵力×0.75 + 对方气血上限×0.15',
   );
   // 一场一次：释放之后控制器再点这门招也只按空手执行
   const laterSkills = events.filter(
@@ -2240,7 +2224,7 @@ function outcomesOf(events: BattleEvent[], decideIndex: number): Array<'hit' | '
   return out;
 }
 
-test('X25 深渊领域：起手置位，对方出手前吃 5 点暗流，两次自己的攻击之后领域消失', () => {
+test('X25 深渊领域：起手置位，对方出手前吃 15 点暗流，三次自己的攻击之后领域消失', () => {
   const a = mkFighter({ power: 0, speed: 20, skills: ['abyss-field'], weapons: ['water-gun'] });
   const b = mkFighter({ speed: 12, agility: 30, skills: ['dove'] });
   const gunAfterField: Controller = {
@@ -2250,7 +2234,7 @@ test('X25 深渊领域：起手置位，对方出手前吃 5 点暗流，两次�
         : { kind: 'skill', skill: 'abyss-field' },
   };
   let checked = 0;
-  let thirdDodges = 0;
+  let fourthDodges = 0;
   for (let i = 0; i < 120; i++) {
     const events = fight(named(a, '甲'), named(b, '乙'), `abyss-${i}`, [gunAfterField, unarmedOnly()]);
     const castAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'abyss-field');
@@ -2259,21 +2243,24 @@ test('X25 深渊领域：起手置位，对方出手前吃 5 点暗流，两次�
     const foeTurn = events.findIndex((e, j) => j > castAt && e.kind === 'decide' && e.actor === 1);
     if (foeTurn < 0) continue;
     const tick = events[foeTurn - 1];
-    if (!(tick.kind === 'field' && tick.actor === 0 && tick.damage === 5)) continue;
-    // 领域期间自己的攻击（身法 30 + 化鸽遁也闪不开），两次之后照常判闪避
+    if (!(tick.kind === 'field' && tick.actor === 0 && tick.damage === 15)) continue;
+    // 领域期间自己的攻击（身法 30 + 化鸽遁也闪不开），三次之后照常判闪避
     const attacks: Array<Array<'hit' | 'dodge'>> = [];
     for (let j = castAt + 1; j < events.length; j++) {
       const e = events[j];
       if (e.kind !== 'decide' || e.actor !== 0 || e.action.kind !== 'weapon') continue;
       attacks.push(outcomesOf(events, j));
     }
-    if (attacks.length < 3) continue;
+    if (attacks.length < 4) continue;
     checked++;
-    assert.ok(!attacks[0].includes('dodge') && !attacks[1].includes('dodge'), `第 ${i} 场：领域期间必中`);
-    if (attacks[2].includes('dodge')) thirdDodges++;
+    assert.ok(
+      !attacks[0].includes('dodge') && !attacks[1].includes('dodge') && !attacks[2].includes('dodge'),
+      `第 ${i} 场：领域期间必中`,
+    );
+    if (attacks[3].includes('dodge')) fourthDodges++;
   }
-  assert.ok(checked >= 20, `该够多场次看到三次攻击：${checked}`);
-  assert.ok(thirdDodges > 0, '两次攻击后领域消失，第三次该有闪避');
+  assert.ok(checked >= 20, `该够多场次看到四次攻击：${checked}`);
+  assert.ok(fourthDodges > 0, '三次攻击后领域消失，第四次该有闪避');
 });
 
 test('X25 瞬影：起手后挨打只出 dodge、不掉血；必中的烟花也打不中', () => {
