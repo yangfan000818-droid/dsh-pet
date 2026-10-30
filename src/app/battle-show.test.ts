@@ -1740,6 +1740,9 @@ test('X22 鬼血：三颗血珠一起飞过去', () => {
   );
   const [shot] = shotsOf(steps);
   assert.deepEqual([shot.shot.kind, shot.shot.count], ['血珠', 3]);
+  // 血珠得等素材里真正离手才发（早了会「血先飞出去、手还停在原地」）
+  const [cast] = animsOf(steps, '出手-鬼血');
+  assert.equal(shot.at, cast.at + releaseOffset('出手-鬼血'));
 });
 
 test('X25 鲸派气功：聚气播出手-聚气，收势后留一颗鲸息，不排飞行物', () => {
