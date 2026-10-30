@@ -346,6 +346,8 @@ test('X26 出招面板：技能说明自然换行，不用省略号藏效果；�
   assert.match(panelPage, /\.action \.label\{[^}]*white-space:nowrap/, '名称仍保持单行');
   // 超过最大高度才在窗内滚动
   assert.match(panelPage, /#buttons\{[^}]*overflow-y:auto/);
+  // 行高按卡片内容撑开：窗高被夹住时 auto 行会退回 min-content，把名称挤成 0 高（真机踩过）
+  assert.match(panelPage, /#buttons\{[^}]*grid-auto-rows:max-content/);
 });
 
 test('X26 出招面板：长说明按页面实测高度撑开，超过 420 才夹到最大高度滚动', async () => {

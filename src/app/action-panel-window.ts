@@ -391,7 +391,7 @@ body{padding:7px 9px;border-radius:12px;background:#f7f2e7;box-shadow:0 3px 10px
 #timer{flex:none;font-size:11px;line-height:16px;color:#6b6254;font-variant-numeric:tabular-nums}
 #progress{height:3px;border-radius:2px;background:#e3d8c4;overflow:hidden;flex:none}
 #progressFill{width:100%;height:100%;background:#3f7d5a;transform-origin:left}
-#buttons{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;overflow-y:auto;overflow-x:hidden;min-height:0}
+#buttons{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));grid-auto-rows:max-content;gap:6px;overflow-y:auto;overflow-x:hidden;min-height:0}
 #buttons.mode{grid-template-columns:repeat(auto-fit,minmax(90px,1fr))}
 .group{grid-column:1 / -1;display:flex;align-items:center;gap:5px;height:12px;min-width:0;font-size:11px;line-height:12px;color:#6b6254;white-space:nowrap}
 .group::before{content:"";width:6px;height:6px;border-radius:50%;flex:none}

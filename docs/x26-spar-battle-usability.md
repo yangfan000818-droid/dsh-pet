@@ -156,3 +156,10 @@
 - 针对性测试：`features-adventure` / `features-live-battle` / `features-cultivation` / `features-spar` / `features-spar-live` 共 55/55 通过。
 - 全量 `npm test`：1309/1309 通过（菜单守卫修复后重跑）。
 - 未执行的核验：真机界面与双机联机，见 10.3。
+
+### 10.5 真机返修：出招面板的招式名称被挤掉（2026-10-30）
+
+- 现象：说明文字换行后，部分卡片只剩效果说明，名称整行消失（心魔手动出招面板截图确认）。
+- 根因：`#buttons` 的高度被窗口上限夹住，grid 的 `auto` 行在空间不足时退回 min-content；卡片是纵向 flex，`.label` 又带 `overflow:hidden`（自动最小尺寸为 0），于是 34px 的行高先压掉名称，留下两行说明。
+- 修复：`#buttons` 增加 `grid-auto-rows:max-content`，行高按卡片实际内容撑开，超出 420 仍由窗内滚动承担。
+- 验证：用 Playwright + 系统 Chrome，以 518×395 视口渲染真实的 `panelPage`；修复前两行说明的卡片 label 高 0–2px，修复后全部 14px。`action-panel-window.test.ts` 13/13 通过（含新增的 `grid-auto-rows` 回归断言）。
