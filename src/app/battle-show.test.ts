@@ -1708,3 +1708,82 @@ test('X22 鬼血：三颗血珠一起飞过去', () => {
   const [shot] = shotsOf(steps);
   assert.deepEqual([shot.shot.kind, shot.shot.count], ['血珠', 3]);
 });
+
+test('X25 鲸派气功：聚气只出护身印与台词，不排飞行物', () => {
+  const steps = timeline(
+    [
+      start(0),
+      decide(0, { kind: 'skill', skill: 'tide-cannon' }),
+      { actor: 0, kind: 'skill', skill: 'tide-cannon', charging: true, hp },
+    ],
+    NAMES,
+    seq(),
+  );
+  assert.equal(animsOf(steps, '出手-护身印').length, 1, '聚气借用护身印的结印');
+  assert.equal(shotsOf(steps).length, 0, '聚气不排飞行物');
+  const said = steps.find((step) => step.line && step.who === 0);
+  assert.ok(said && /气|潮/.test(said.line ?? ''), `聚气台词：${said?.line}`);
+  assert.ok(
+    steps.some((step) => step.line && step.hp[0] === hp[0] && step.hp[1] === hp[1]),
+    '只刷台词与血条',
+  );
+});
+
+test('X25 鲸派气功释放：自动释放不播动作，自排降龙 + 水浪，命中受击与台词', () => {
+  const steps = timeline(
+    [
+      start(0),
+      { actor: 0, kind: 'decide', action: { kind: 'skill', skill: 'tide-cannon' }, autoRelease: true, hp },
+      { actor: 0, kind: 'skill', skill: 'tide-cannon', release: true, damage: 86, hp: [100, 14] },
+    ],
+    NAMES,
+    seq(),
+  );
+  assert.equal(animsOf(steps, '出手-护身印').length, 0, '自动释放的 decide 不播动作');
+  const cast = steps.find((step) => step.anim === '出手-降龙');
+  assert.ok(cast, '释放那一手自己排出手-降龙');
+  const [shot] = shotsOf(steps);
+  assert.ok(shot, '该放出水浪');
+  assert.deepEqual([shot.shot.kind, shot.shot.track, shot.shot.hitFx], ['水浪', 'line', '命中-水花']);
+  assert.equal(shot.at, cast!.at + releaseOffset('出手-降龙'), '水浪在降龙素材的离手时刻放出');
+  const impact = impactOf(shot);
+  assert.ok(
+    steps.some((step) => step.anim === HIT && step.who === 1),
+    '命中那一刻对方受击',
+  );
+  const landed = steps.find((step) => step.at === impact && step.line);
+  assert.ok(landed && /气功|水浪/.test(landed.line ?? ''), `释放台词：${landed?.line}`);
+  assert.deepEqual(landed!.hp, [100, 14], '掉血在命中那一刻');
+});
+
+test('X25 深渊领域 / 瞬影：起手与暗流只刷台词与血条，不排飞行物', () => {
+  for (const skill of ['abyss-field', 'shadow-step'] as const) {
+    const steps = timeline(
+      [start(0), decide(0, { kind: 'skill', skill }), { actor: 0, kind: 'skill', skill, hp }],
+      NAMES,
+      seq(),
+    );
+    assert.equal(shotsOf(steps).length, 0, `${skill} 没有飞行物`);
+    assert.equal(animsOf(steps, ATTACK_SHOW[skill].action).length, 1, `${skill} 借用现有动作`);
+    assert.ok(
+      steps.some((step) => step.line && step.who === 0),
+      `${skill} 有台词`,
+    );
+  }
+  // 暗流事件（field）：只刷台词与血条
+  const steps = timeline(
+    [
+      start(0),
+      decide(0, { kind: 'skill', skill: 'abyss-field' }),
+      { actor: 0, kind: 'skill', skill: 'abyss-field', hp },
+      { actor: 0, kind: 'field', damage: 5, hp: [100, 85] },
+    ],
+    NAMES,
+    seq(),
+  );
+  assert.equal(shotsOf(steps).length, 0, '暗流不放飞行物');
+  assert.ok(
+    steps.some((step) => step.line && step.hp[0] === 100 && step.hp[1] === 85),
+    '暗流只刷台词与血条',
+  );
+});

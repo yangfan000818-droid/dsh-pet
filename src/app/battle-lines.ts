@@ -63,7 +63,17 @@ const SKILL_LINES: Record<string, string[]> = {
   'ghost-knock': ['{a}在看不见的门上敲了两下，门后只剩死寂', '{a}叩响门扉，{b}耳边全是敲门声'],
   'ghost-painting': ['{a}指尖一勾，画出一道扭曲的符', '{a}胸前一划，鬼画沿着纹路爬过去'],
   'ghost-blood': ['{a}指尖一抹，几颗血珠打向{b}，-{d}', '{a}一弹指，暗红的血珠钉在{b}身上，-{d}'],
+  // 鲸派气功（X25）：这两句是聚气那一拍；释放句在 TIDE_RELEASE_LINES
+  'tide-cannon': ['{a}沉腰聚气，掌心凝出一道水柱', '{a}屏息蓄力，潮声在掌中翻涌'],
+  'abyss-field': ['{a}抬手一压，深渊领域铺开', '{a}脚下黑潮漫开，深渊领域成形'],
+  'shadow-step': ['{a}身形一晃，瞬影已发动', '{a}化作一道残影，瞬影发动'],
 };
+
+/** 鲸派气功释放（X25）：`skill` 事件带 `release` 时用这两句 */
+const TIDE_RELEASE_LINES = ['{a}推出鲸派气功，水浪轰然砸落，-{d}', '{a}气功出膛，一柱水浪撞上{b}，-{d}'];
+
+/** 深渊领域的暗流（X25）：`field` 事件，`{a}` 是领域主人，`{b}` 是挨打的一方 */
+const FIELD_LINES = ['{a}暗流一卷，{b}被拖住，-{d}', '{a}暗流涌动，{b}气血一沉，-{d}'];
 
 /** 逆流护身印弹回去（X21）：`{a}` 是护身的一方，`{b}` 是打过来的那一方 */
 const REVERSE_LINES = ['{a}白袍一卷，原样打回{b}，-{d}', '{a}逆流一荡，{b}自食其力，-{d}'];
@@ -225,6 +235,8 @@ export function lineOf(
       return fill(pick(KIND_LINES['play-dead']), a);
     case 'skill':
       if (event.behead) return fill(pick(BEHEAD_LINES), a, b, event.damage ?? 0);
+      if (event.skill === 'tide-cannon' && event.release)
+        return decorate(fill(pick(TIDE_RELEASE_LINES), a, b, event.damage ?? 0));
       if (event.sealed === 'weapon') return fill(pick(SEALED_LINES), a, b, event.damage ?? 0);
       if (event.sealed === 'skill') return fill(pick(SEALED_SKILL_LINES), a, b, event.damage ?? 0);
       if (event.paint) return fill(pick(PAINT_LINES), a, b);
@@ -244,6 +256,8 @@ export function lineOf(
       return fill(pick(DEVOUR_LINES[event.what]), a, b, event.damage ?? 0, event.heal ?? 0);
     case 'knock':
       return fill(pick(KNOCK_LINES), a, b, event.damage);
+    case 'field':
+      return fill(pick(FIELD_LINES), a, b, event.damage);
     case 'end':
       return fill(pick(event.reason === 'farewell' ? FAREWELL_END_LINES : END_LINES), a, b);
   }

@@ -436,3 +436,31 @@ test('X11：普通名字照旧补「的」，名字中间的「的」不受影�
     '吃白饭的掸子扫过小蓝的鼻尖，-6',
   );
 });
+
+test('X25：鲸派气功聚气 / 释放、深渊领域、瞬影、暗流都有两句台词，不超过 40 字', () => {
+  const names: [string, string] = ['小花小花小花小花', '心魔心魔心魔心魔'];
+  const cases: Array<[BattleEvent, (line: string) => boolean]> = [
+    [{ actor: 0, kind: 'skill', skill: 'tide-cannon', charging: true, hp: [10, 10] }, (l) => /气|潮/.test(l)],
+    [
+      { actor: 0, kind: 'skill', skill: 'tide-cannon', release: true, damage: 86, hp: [10, 4] },
+      (l) => l.includes('86') && l.includes(names[0]),
+    ],
+    [{ actor: 0, kind: 'skill', skill: 'abyss-field', hp: [10, 10] }, (l) => /深渊|领域/.test(l)],
+    [{ actor: 0, kind: 'skill', skill: 'shadow-step', hp: [10, 10] }, (l) => /瞬影|残影/.test(l)],
+    [
+      { actor: 0, kind: 'field', damage: 5, hp: [10, 5] },
+      (l) => l.includes('5') && l.includes(names[0]) && l.includes(names[1]),
+    ],
+  ];
+  for (const [event, check] of cases) {
+    const seen = new Set<string>();
+    for (const roll of [0.01, 0.5, 0.99]) {
+      const line = lineOf(event, names, () => roll);
+      assert.ok(line !== null, `${event.kind} 应该有台词`);
+      assert.ok(check(line!), `${event.kind} 台词内容不对：${line}`);
+      assert.ok(line!.length <= 40, `${event.kind} 台词超长：${line}`);
+      seen.add(line!);
+    }
+    assert.ok(seen.size >= 2, `${event.kind} 至少两句`);
+  }
+});

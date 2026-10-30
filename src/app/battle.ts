@@ -122,7 +122,10 @@ export type SkillId =
   | 'headless-shadow'
   | 'ghost-knock'
   | 'ghost-painting'
-  | 'ghost-blood';
+  | 'ghost-blood'
+  | 'tide-cannon'
+  | 'abyss-field'
+  | 'shadow-step';
 
 export interface SkillDef {
   id: SkillId;
@@ -167,6 +170,9 @@ export const SKILLS: Record<SkillId, SkillDef> = {
   'ghost-knock': skill('ghost-knock', '鬼敲门', '主动'),
   'ghost-painting': skill('ghost-painting', '鬼画', '主动'),
   'ghost-blood': skill('ghost-blood', '鬼血', '主动'),
+  'tide-cannon': skill('tide-cannon', '鲸派气功', '主动'),
+  'abyss-field': skill('abyss-field', '深渊领域', '主动'),
+  'shadow-step': skill('shadow-step', '瞬影', '主动'),
 };
 
 export const SKILL_IDS = Object.keys(SKILLS) as SkillId[];
@@ -244,7 +250,7 @@ export const MOVE_IDS = Object.keys(MOVES) as MoveId[];
  * 引擎版本（X5 名帖的 v）：结算规则、图鉴内容变了就 +1。切磋双方在名帖里各带一份，
  * 两边不同就切不了（谁也不知道对方那版引擎会打出什么）。
  */
-export const BATTLE_VERSION = 7;
+export const BATTLE_VERSION = 8;
 
 /**
  * 切磋节奏（X23）：切磋 / 隔空只结算 65% 伤害，把「两三手互秒」拉成有来有回的长局。
@@ -281,6 +287,10 @@ const ACTIVE_SKILLS: readonly SkillId[] = [
   'ghost-knock',
   'ghost-painting',
   'ghost-blood',
+  // X25：蓄力 / 领域 / 瞬影
+  'tide-cannon',
+  'abyss-field',
+  'shadow-step',
 ];
 
 export interface Fighter {
@@ -358,7 +368,14 @@ export type SkipCause = 'stun' | 'freeze' | 'sleep' | 'dream' | 'float' | 'sham'
 
 export type BattleEvent =
   | { actor: 0 | 1; kind: 'start'; hp: [number, number] }
-  | { actor: 0 | 1; kind: 'decide'; action: Action; hp: [number, number] }
+  | {
+      actor: 0 | 1;
+      kind: 'decide';
+      action: Action;
+      /** 蓄力（X25）：这一手是鲸派气功自动释放，不经过决策、也不播动作 */
+      autoRelease?: true;
+      hp: [number, number];
+    }
   | {
       actor: 0 | 1;
       kind: 'hit';
@@ -421,10 +438,16 @@ export type BattleEvent =
       behead?: true;
       /** 鬼画封掉的被动（X22）：本场失效 */
       paint?: SkillId;
+      /** 鲸派气功聚气那一拍（X25）：这一拍不造成伤害 */
+      charging?: true;
+      /** 鲸派气功蓄力放出（X25）：damage 已经在公式上结算 */
+      release?: true;
       hp: [number, number];
     }
   /** 鬼敲门（X22）：actor 是被敲门的一方，下一次真正出手前先挨这一下 */
   | { actor: 0 | 1; kind: 'knock'; damage: number; hp: [number, number] }
+  /** 深渊领域（X25）：actor 是领域主人，对方真正出手前先挨一下暗流 */
+  | { actor: 0 | 1; kind: 'field'; damage: number; hp: [number, number] }
   /** 逆流护身印弹回去（X21）：actor 是护身的一方，damage 是弹回去的数 */
   | { actor: 0 | 1; kind: 'reverse'; damage: number; hp: [number, number] }
   /** 前有古人补的那一击（X21）：actor 是召唤方 */
@@ -585,6 +608,12 @@ interface Side {
   knock: boolean;
   /** 前有古人还挂着（X21）：下一次真正出手时古人先补一击 */
   ancient: boolean;
+  /** 鲸派气功蓄力中（X25）：下一次真正出手自动释放，期间挨打减伤 */
+  charge: number;
+  /** 深渊领域还剩几次自己的攻击（X25） */
+  field: number;
+  /** 瞬影（X25）：挨普通攻击全闪，自己下一次攻击必中 */
+  blink: boolean;
 }
 
 function makeSide(f: Fighter, initialDelay: number): Side {
@@ -608,6 +637,9 @@ function makeSide(f: Fighter, initialDelay: number): Side {
     sealedPassive: null,
     knock: false,
     ancient: false,
+    charge: 0,
+    field: 0,
+    blink: false,
   };
   // 泡泡 / 灵兽的初始次数也走 hasSkill（X22）：以后开局就被封的情况不用另写一份判定
   side.bubbles = hasSkill(side, 'bubble') ? 2 : 0;
@@ -634,6 +666,8 @@ function applyDamage(
   opts: { pierce?: boolean; noPlayDead?: boolean } = {},
 ): { damage: number; blocked: boolean; playDead: boolean } {
   let damage = raw;
+  // 鲸派气功蓄力（X25）：先按 CHARGE_GUARD 收一道，泡泡护体照旧在这之后挡
+  if (target.charge > 0) damage = Math.floor(damage * CHARGE_GUARD);
   const blocked = !opts.pierce && hasSkill(target, 'bubble') && target.bubbles > 0;
   if (blocked) {
     target.bubbles -= 1;
@@ -737,6 +771,8 @@ export function autoController(rng: () => number): Controller {
         return { kind: 'skill', skill: 'eat-hardship' };
       // 逆流护身印（X21）：气血低于一半先撑起反弹
       if (unused.includes('reverse-seal') && hp * 2 < maxHp) return { kind: 'skill', skill: 'reverse-seal' };
+      // 瞬影（X25）：气血低于一半先用，把下一轮普通攻击全闪掉
+      if (unused.includes('shadow-step') && hp * 2 < maxHp) return { kind: 'skill', skill: 'shadow-step' };
       // 万我大手印（X21）：对方法宝多于两件时先把法宝攥住
       if (unused.includes('myriad-palm') && view.foe.weapons.length > 2) return { kind: 'skill', skill: 'myriad-palm' };
       // X22：对方被动数决定鬼血 / 鬼画，残血取首级，满血先敲门
@@ -746,13 +782,24 @@ export function autoController(rng: () => number): Controller {
       if (unused.includes('headless-shadow') && foeHp * 10 < foeMax * 4)
         return { kind: 'skill', skill: 'headless-shadow' };
       if (unused.includes('ghost-knock') && foeHp * 10 > foeMax * 7) return { kind: 'skill', skill: 'ghost-knock' };
+      // 深渊领域（X25）：对方带化鸽遁 / 第六感这类能闪的配招时，先把闪避禁掉
+      if (
+        unused.includes('abyss-field') &&
+        (view.foe.skills.includes('dove') || view.foe.skills.includes('sixth-sense'))
+      )
+        return { kind: 'skill', skill: 'abyss-field' };
       // 鲸吞带回血：气血低于七成时先用
       if (unused.includes('whale-gulp') && hp * 10 < maxHp * 7) return { kind: 'skill', skill: 'whale-gulp' };
       // 五指拳心剑收人头（X9）：对方剩不到三成半就捅
       if (unused.includes('finger-sword') && foeHp * 100 < foeMax * 35) return { kind: 'skill', skill: 'finger-sword' };
       // 魂牵梦绕先把入梦挂上（X9）：对方还满着就先念咒
       if (unused.includes('dream-chant') && foeHp * 10 > foeMax * 7) return { kind: 'skill', skill: 'dream-chant' };
-      const actives = unused.filter((s) => s !== 'bloom');
+      // 鲸派气功（X25）：对方气血还足时先聚气，下一手自动放出
+      if (unused.includes('tide-cannon') && foeHp * 10 > foeMax * 6) return { kind: 'skill', skill: 'tide-cannon' };
+      // X25 三招都有明确的触发条件：不丢进随机池，条件没到就不浪费（深渊领域尤其经不起白放一手）
+      const actives = unused.filter(
+        (s) => s !== 'bloom' && s !== 'tide-cannon' && s !== 'abyss-field' && s !== 'shadow-step',
+      );
       if (actives.length > 0 && rng() < 0.25) return { kind: 'skill', skill: pick(rng, actives) };
       // 招式（Y0）：只在身上有招时才多抽随机数——不带 moves 的 Fighter，决策抽取次数和以前一样
       const moves = view.you.moves ?? [];
@@ -954,6 +1001,17 @@ const PAINT_POWER = 0.75;
 const BLOOD_BASE = 50;
 const BLOOD_POWER = 0.75;
 const BLOOD_PER_PASSIVE = 4;
+
+/**
+ * 鲸派气功 / 深渊领域 / 瞬影（X25）：任务书 §2 的原语数值，先按规则跑通，平衡等 battle-sim 再看。
+ * 鲸派气功伤害 = 基数 + 灵力×0.75 + 对方气血上限×0.15；聚气期间自己挨打 ×0.7。
+ * 深渊领域持续两次自己的攻击，对方每次真正出手前吃 5 点；瞬影不需要数值。
+ */
+const TIDE_BASE = 56;
+const TIDE_HP_SHARE = 0.6;
+const CHARGE_GUARD = 0.7;
+const FIELD_TURNS = 2;
+const FIELD_TICK = 5;
 
 /** 一场对战的额外开关（X16）：`farewell` 只在串门切磋里传，隔空 / 心魔 / 秘境 / 渡劫都不传 */
 export interface FightOptions {
@@ -1168,13 +1226,19 @@ function runFight(
       const comboRoll = rng();
       const skipRoll = rng();
       const counterRoll = rng();
+      // 瞬影（X25）：挨普通攻击一律闪（含多段、必中），不消耗泡泡 / 魂影 / 替挡
+      if (foe.blink) {
+        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
+        continue;
+      }
       // 墨汁糊眼：打空用 dodgeRoll 的高段（闪避用的是低段，互不重叠；不新增抽签）
       if (blinded && dodgeRoll >= BLIND_MISS_FROM) {
         events.push({ actor: self, kind: 'miss', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
-      // 必中：烟花；银托盘最后一段从背后回旋磕过来；对方睡着 / 入梦
-      const sure = spec?.mustHit || (spec?.returnSure && hit === hits - 1) || asleep(foe);
+      // 必中：烟花；银托盘最后一段从背后回旋磕过来；对方睡着 / 入梦；
+      // 深渊领域（X25）与瞬影（X25）也都是自己出手必中
+      const sure = me.field > 0 || me.blink || spec?.mustHit || (spec?.returnSure && hit === hits - 1) || asleep(foe);
       if (!sure && dodgeRoll < dodgeRate(foe)) {
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
         continue;
@@ -1280,12 +1344,12 @@ function runFight(
         combos += 1;
       }
     }
-    // 灵兽：自己前几次出手后追加一击（可被闪避，不会被反击）
+    // 灵兽：自己前几次出手后追加一击（可被闪避，不会被反击）；瞬影连灵兽那一口也闪
     if (me.beastLeft > 0 && foe.hp > 0) {
       me.beastLeft -= 1;
       const dodgeRoll = rng();
       const dmgRoll = rng();
-      if (asleep(foe) || !(dodgeRoll < dodgeRate(foe))) {
+      if (!foe.blink && (asleep(foe) || !(dodgeRoll < dodgeRate(foe)))) {
         const applied = applyDamage(foe, scaleDamage(randBetween(dmgRoll, 4, 7), foe));
         events.push({
           actor: self,
@@ -1300,6 +1364,9 @@ function runFight(
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
       }
     }
+    // 深渊领域（X25）：自己的每一次攻击之后少一层；瞬影这一手打完就散（放非攻击的招不算）
+    if (me.field > 0) me.field -= 1;
+    if (me.blink) me.blink = false;
   };
 
   /** 出招者交代的动作不合法（没有的法宝 / 招式、用过的主动招式、被封的那一类）时按空手处理 */
@@ -1330,6 +1397,19 @@ function runFight(
   /** 一次出手（含主动招式），返回实际执行的动作；凭空生花的「马上再出手一次」在里面就地补一次 */
   const takeAction = (self: 0 | 1): Action => {
     const me = sides[self];
+    // 深渊领域（X25）：领域主人铺开以后，对方每一次真正出手之前先吃一口暗流（被控跳过不算）
+    const fieldOwner = sides[self ^ 1];
+    if (fieldOwner.field > 0) {
+      const applied = applyDamage(me, scaleDamage(FIELD_TICK, me));
+      events.push({
+        actor: (self ^ 1) as 0 | 1,
+        kind: 'field',
+        damage: applied.damage,
+        hp: hpPair(sides[0], sides[1]),
+      });
+      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      if (me.hp === 0) return { kind: 'unarmed' };
+    }
     // 鬼敲门（X22）：门已经敲响，这一手真正出手之前先挨这一下；被打死就直接收场。
     // 被控跳过时不走这里，记号一直挂着（同前有古人的口径）
     if (me.knock) {
@@ -1338,6 +1418,32 @@ function runFight(
       events.push({ actor: self, kind: 'knock', damage: applied.damage, hp: hpPair(sides[0], sides[1]) });
       if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       if (me.hp === 0) return { kind: 'unarmed' };
+    }
+    // 鲸派气功（X25）：聚过气以后，下一次真正出手不再听决策，直接放出（不经过 legalize：这门主动招已经 used）
+    if (me.charge > 0) {
+      me.charge = 0;
+      const foe = sides[self ^ 1];
+      const action: Action = { kind: 'skill', skill: 'tide-cannon' };
+      events.push({ actor: self, kind: 'decide', action, autoRelease: true, hp: hpPair(sides[0], sides[1]) });
+      // 必中：不判闪避，也不吃魂影 / 替挡；泡泡护体照挡（和 ancient 的口径一致）
+      const applied = applyDamage(
+        foe,
+        scaleDamage(
+          TIDE_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * TIDE_HP_SHARE),
+          foe,
+        ),
+      );
+      events.push({
+        actor: self,
+        kind: 'skill',
+        skill: 'tide-cannon',
+        release: true,
+        damage: applied.damage,
+        hp: hpPair(sides[0], sides[1]),
+      });
+      if (applied.playDead)
+        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      return action;
     }
     const asked = controllers[self].decide(view(self));
     // 封法宝 / 封招式（X21）：这一手按封住的类别过滤；「真正出手」一次就解封（同墨汁的口径，在被控跳过时不走这里）
@@ -1691,6 +1797,27 @@ function runFight(
         });
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'tide-cannon') {
+        // 鲸派气功（X25）：这一拍只聚气、不造成伤害；下一次真正出手自动放出
+        me.charge = 1;
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: 'tide-cannon',
+          charging: true,
+          hp: hpPair(sides[0], sides[1]),
+        });
+      }
+      if (action.skill === 'abyss-field') {
+        // 深渊领域（X25）：禁掉对方的闪避，对方每次出手前吃一口暗流；自己的攻击会一层层用掉它
+        me.field = FIELD_TURNS;
+        events.push({ actor: self, kind: 'skill', skill: 'abyss-field', hp: hpPair(sides[0], sides[1]) });
+      }
+      if (action.skill === 'shadow-step') {
+        // 瞬影（X25）：挨普通攻击全闪，自己下一次攻击必中；不因挨打消失
+        me.blink = true;
+        events.push({ actor: self, kind: 'skill', skill: 'shadow-step', hp: hpPair(sides[0], sides[1]) });
       }
     } else {
       attack(self, action, blinded);

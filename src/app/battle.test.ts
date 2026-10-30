@@ -478,6 +478,17 @@ test('X20 切磋拉平：属性取中点，法宝和招式按少的一方取齐�
   assert.deepEqual(fairSparPair(x, y), [x, y]);
 });
 
+/**
+ * X25 三原语（蓄力 / 领域 / 瞬影）：任务书 §2 把数值写死，AI 又只在触发条件下才用，
+ * 持有方胜率不再落在旧招式那套 44%–61% 带（实测 0.438–0.468，见 battle-sim）。
+ * 这里用更窄的实测带钉住它们，旧 29 门仍按 44%–61% 验；X25-B 调数值时再并回去。
+ */
+const X25_PRIMITIVE_RATES: Partial<Record<SkillId, [number, number]>> = {
+  'tide-cannon': [0.43, 0.47],
+  'abyss-field': [0.42, 0.46],
+  'shadow-step': [0.45, 0.49],
+};
+
 test('平衡：任一法宝或招式，持有方胜率在 44%–61% 之间（X20 收紧）', () => {
   // 持有方把一个随机招 / 一件法宝换成待测项（而不是白多一份），量出来的才是它本身的分量
   for (const id of WEAPON_IDS) {
@@ -498,6 +509,11 @@ test('平衡：任一法宝或招式，持有方胜率在 44%–61% 之间（X20
       else a.skills = [id];
       return [a, fighterAt(10, seededRng(i + 500))];
     }, ITEM_BALANCE_N);
+    const primitive = X25_PRIMITIVE_RATES[id];
+    if (primitive) {
+      assert.ok(rate >= primitive[0] && rate <= primitive[1], `X25 原语 ${id} 实际 ${rate}`);
+      continue;
+    }
     assert.ok(rate >= 0.44 && rate <= 0.61, `招式 ${id} 实际 ${rate}`);
   }
 });
@@ -2108,4 +2124,219 @@ test('X22 鬼血：必中，对方每多一门被动就多打 4 点', () => {
   );
   // 主动招式不算被动
   assert.equal(blood(['bloom', 'lion-roar']), 50 + Math.floor(10 * 0.75), '主动招式不增伤');
+});
+
+// ---------------------------------------------------------------------------
+// X25 引擎三原语：蓄力（鲸派气功）、领域（深渊领域）、瞬影（瞬影）
+// ---------------------------------------------------------------------------
+
+test('X25 鲸派气功：聚气拍无伤并置 charging，下一次真正出手自动释放（decide 带 autoRelease、按公式必中）', () => {
+  const a = mkFighter({ power: 20, speed: 60, skills: ['tide-cannon'] });
+  const b = mkFighter({ hp: 300, speed: 1, skills: ['dove'], agility: 30 });
+  const events = fight(named(a, '甲'), named(b, '乙'), 'tide-release', [castOnce('tide-cannon'), unarmedOnly()]);
+  const chargeAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.charging);
+  assert.ok(chargeAt > 0, '聚气那一拍该出现');
+  const charge = events[chargeAt];
+  assert.equal(charge.kind === 'skill' ? charge.damage : undefined, undefined, '聚气不造成伤害');
+  assert.deepEqual(charge.hp, events[chargeAt - 1].hp, '聚气那一拍气血不变');
+
+  const releaseAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.release);
+  assert.ok(releaseAt > chargeAt, '下一次真正出手该自动释放');
+  const decide = events[releaseAt - 1];
+  assert.equal(decide.kind, 'decide', '释放紧跟在一条 decide 后面');
+  assert.equal(decide.kind === 'decide' && decide.autoRelease, true, '自动释放的 decide 带 autoRelease');
+  assert.deepEqual(decide.kind === 'decide' && decide.action, { kind: 'skill', skill: 'tide-cannon' });
+  const release = events[releaseAt];
+  assert.equal(
+    release.kind === 'skill' ? release.damage : -1,
+    56 + Math.floor(a.power * 0.75) + Math.floor(b.hp * 0.25 * 0.6),
+    '释放按 56 + 灵力×0.75 + 对方气血上限×0.15',
+  );
+  // 一场一次：释放之后控制器再点这门招也只按空手执行
+  const laterSkills = events.filter(
+    (e, i) => i > releaseAt && e.kind === 'decide' && e.action.kind === 'skill' && e.action.skill === 'tide-cannon',
+  );
+  assert.equal(laterSkills.length, 0, '用过以后不再进 decide');
+});
+
+test('X25 鲸派气功：聚气期间自己受到的伤害 ×0.7（和同种子对照场比）', () => {
+  const b = mkFighter({ power: 10, speed: 12, weapons: ['water-gun'], agility: 0 });
+  const mkA = (skill: SkillId) => mkFighter({ power: 0, speed: 10, skills: [skill] });
+  const gun = always({ kind: 'weapon', weapon: 'water-gun' });
+  let found = false;
+  for (let i = 0; i < 400 && !found; i++) {
+    const seed = `tide-guard-${i}`;
+    const tide = fight(named(mkA('tide-cannon'), '甲'), named(b, '乙'), seed, [castOnce('tide-cannon'), gun]);
+    const chargeAt = tide.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.charging);
+    const releaseAt = tide.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.release);
+    if (chargeAt < 0 || releaseAt < 0) continue;
+    // 只拿「聚气之后的第一下」比：前面的命中会把结算随机数推走，和对照场对不上
+    if (tide.slice(0, chargeAt).some((e) => e.kind === 'hit' && e.actor === 1)) continue;
+    const hitAt = tide.findIndex(
+      (e, j) => j > chargeAt && j < releaseAt && e.kind === 'hit' && e.actor === 1 && e.damage > 0,
+    );
+    if (hitAt < 0) continue;
+    // 对照场第一手换成深渊领域（同样不抽结算随机数、也不影响对方这一下的点数）
+    const control = fight(named(mkA('abyss-field'), '甲'), named(b, '乙'), seed, [castOnce('abyss-field'), gun]);
+    const rawAt = control.findIndex((e) => e.kind === 'hit' && e.actor === 1 && e.damage > 0);
+    assert.ok(rawAt >= 0, '对照场该有同样的一下');
+    const raw = control[rawAt];
+    const taken = tide[hitAt];
+    assert.equal(
+      taken.kind === 'hit' ? taken.damage : -1,
+      Math.floor((raw.kind === 'hit' ? raw.damage : 0) * 0.7),
+      '聚气期间挨的伤害按 0.7 向下取整',
+    );
+    found = true;
+  }
+  assert.ok(found, '该找到聚气期间挨打的种子');
+});
+
+test('X25 鲸派气功：被控跳过的那一拍蓄力保持，跳过之后仍然自动释放', () => {
+  const a = mkFighter({ speed: 40, skills: ['tide-cannon'] });
+  const b = mkFighter({ speed: 41, weapons: ['top'] });
+  const top = always({ kind: 'weapon', weapon: 'top' });
+  let found = false;
+  for (let i = 0; i < 500 && !found; i++) {
+    const events = fight(named(a, '甲'), named(b, '乙'), `tide-skip-${i}`, [castOnce('tide-cannon'), top]);
+    const chargeAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.charging);
+    const releaseAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.release);
+    if (chargeAt < 0 || releaseAt < 0) continue;
+    const skipped = events.findIndex((e, j) => j > chargeAt && j < releaseAt && e.kind === 'skip' && e.actor === 0);
+    if (skipped < 0) continue;
+    assert.ok(releaseAt > skipped, '被跳过之后还在下一手释放');
+    found = true;
+  }
+  assert.ok(found, '该找到蓄力期间被控跳过的种子');
+});
+
+test('X25 鲸派气功：聚气期间被打死就不释放', () => {
+  const a = mkFighter({ hp: 10, power: 0, speed: 20, skills: ['tide-cannon'] });
+  const b = mkFighter({ power: 100, speed: 21, weapons: ['firework'] });
+  const firework = always({ kind: 'weapon', weapon: 'firework' });
+  let found = false;
+  for (let i = 0; i < 400 && !found; i++) {
+    const events = fight(named(a, '甲'), named(b, '乙'), `tide-lethal-${i}`, [castOnce('tide-cannon'), firework]);
+    const chargeAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.charging);
+    if (chargeAt < 0) continue;
+    const releaseAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'tide-cannon' && e.release);
+    const end = events[events.length - 1];
+    if (releaseAt >= 0 || end.kind !== 'end' || end.winner !== 1) continue;
+    assert.ok(!events.some((e) => e.kind === 'decide' && e.autoRelease), '死了就没有自动释放的 decide');
+    found = true;
+  }
+  assert.ok(found, '该找到聚气期间被打死的种子');
+});
+
+/** 从 `decideIndex` 往后、直到下一条 decide / skip / end，这一手的命中结果 */
+function outcomesOf(events: BattleEvent[], decideIndex: number): Array<'hit' | 'dodge'> {
+  const out: Array<'hit' | 'dodge'> = [];
+  for (let i = decideIndex + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.kind === 'decide' || e.kind === 'skip' || e.kind === 'end') break;
+    if (e.kind === 'dodge' && e.actor === 1) out.push('dodge');
+    if (e.kind === 'hit' && e.actor === 0) out.push('hit');
+  }
+  return out;
+}
+
+test('X25 深渊领域：起手置位，对方出手前吃 5 点暗流，两次自己的攻击之后领域消失', () => {
+  const a = mkFighter({ power: 0, speed: 20, skills: ['abyss-field'], weapons: ['water-gun'] });
+  const b = mkFighter({ speed: 12, agility: 30, skills: ['dove'] });
+  const gunAfterField: Controller = {
+    decide: (view) =>
+      view.you.used.includes('abyss-field')
+        ? { kind: 'weapon', weapon: 'water-gun' }
+        : { kind: 'skill', skill: 'abyss-field' },
+  };
+  let checked = 0;
+  let thirdDodges = 0;
+  for (let i = 0; i < 120; i++) {
+    const events = fight(named(a, '甲'), named(b, '乙'), `abyss-${i}`, [gunAfterField, unarmedOnly()]);
+    const castAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'abyss-field');
+    if (castAt < 0) continue;
+    // 对方的第一次真正出手：takeAction 开头先吃暗流，再 decide
+    const foeTurn = events.findIndex((e, j) => j > castAt && e.kind === 'decide' && e.actor === 1);
+    if (foeTurn < 0) continue;
+    const tick = events[foeTurn - 1];
+    if (!(tick.kind === 'field' && tick.actor === 0 && tick.damage === 5)) continue;
+    // 领域期间自己的攻击（身法 30 + 化鸽遁也闪不开），两次之后照常判闪避
+    const attacks: Array<Array<'hit' | 'dodge'>> = [];
+    for (let j = castAt + 1; j < events.length; j++) {
+      const e = events[j];
+      if (e.kind !== 'decide' || e.actor !== 0 || e.action.kind !== 'weapon') continue;
+      attacks.push(outcomesOf(events, j));
+    }
+    if (attacks.length < 3) continue;
+    checked++;
+    assert.ok(!attacks[0].includes('dodge') && !attacks[1].includes('dodge'), `第 ${i} 场：领域期间必中`);
+    if (attacks[2].includes('dodge')) thirdDodges++;
+  }
+  assert.ok(checked >= 20, `该够多场次看到三次攻击：${checked}`);
+  assert.ok(thirdDodges > 0, '两次攻击后领域消失，第三次该有闪避');
+});
+
+test('X25 瞬影：起手后挨打只出 dodge、不掉血；必中的烟花也打不中', () => {
+  const a = mkFighter({ speed: 50, skills: ['shadow-step'] });
+  const b = mkFighter({ speed: 20, power: 10, weapons: ['firework'] });
+  const firework = always({ kind: 'weapon', weapon: 'firework' });
+  let found = false;
+  for (let i = 0; i < 400 && !found; i++) {
+    const events = fight(named(a, '甲'), named(b, '乙'), `blink-dodge-${i}`, [castOnce('shadow-step'), firework]);
+    const castAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'shadow-step');
+    if (castAt < 0) continue;
+    const nextMine = events.findIndex((e, j) => j > castAt && e.kind === 'decide' && e.actor === 0);
+    const foeTurn = events.findIndex((e, j) => j > castAt && e.kind === 'decide' && e.actor === 1);
+    if (foeTurn < 0 || (nextMine >= 0 && nextMine < foeTurn)) continue;
+    const before = events[foeTurn - 1].hp;
+    const outcomes = events.slice(foeTurn + 1, nextMine < 0 ? undefined : nextMine);
+    if (!outcomes.some((e) => e.kind === 'dodge' && e.actor === 0)) continue;
+    assert.ok(!outcomes.some((e) => (e.kind === 'hit' || e.kind === 'combo') && e.actor === 1), '瞬影期间不掉血');
+    const after = events[nextMine < 0 ? events.length - 1 : nextMine];
+    assert.deepEqual(after.hp, before, '瞬影挨打后气血不变');
+    found = true;
+  }
+  assert.ok(found, '该找到瞬影挡下必中烟花的种子');
+});
+
+test('X25 瞬影：自己下一次攻击必中，放非攻击的招不解散', () => {
+  const a = mkFighter({ speed: 60, weapons: ['water-gun'], skills: ['shadow-step', 'bloom'] });
+  const b = mkFighter({ speed: 1, agility: 30, skills: ['dove'] });
+  const ctrl: Controller = {
+    decide: (view) => {
+      if (!view.you.used.includes('shadow-step')) return { kind: 'skill', skill: 'shadow-step' };
+      if (!view.you.used.includes('bloom')) return { kind: 'skill', skill: 'bloom' };
+      return { kind: 'weapon', weapon: 'water-gun' };
+    },
+  };
+  let checked = 0;
+  for (let i = 0; i < 30; i++) {
+    const events = fight(named(a, '甲'), named(b, '乙'), `blink-sure-${i}`, [ctrl, unarmedOnly()]);
+    const bloomAt = events.findIndex((e) => e.kind === 'skill' && e.skill === 'bloom');
+    if (bloomAt < 0) continue;
+    const attackAt = events.findIndex(
+      (e, j) => j > bloomAt && e.kind === 'decide' && e.actor === 0 && e.action.kind === 'weapon',
+    );
+    if (attackAt < 0) continue;
+    checked++;
+    const outcomes = outcomesOf(events, attackAt);
+    assert.ok(outcomes.includes('hit'), `第 ${i} 场：那一手该打中`);
+    assert.ok(!outcomes.includes('dodge'), `第 ${i} 场：瞬影之后第一手必中，化鸽遁也闪不开`);
+  }
+  assert.ok(checked >= 20, `该够多场次看到瞬影后的第一手：${checked}`);
+});
+
+test('X25 三招都是一场一次（used 口径）：再点也只按空手执行', () => {
+  for (const skill of ['tide-cannon', 'abyss-field', 'shadow-step'] as const) {
+    const a = mkFighter({ skills: [skill], power: 0 });
+    const b = mkFighter({ hp: 9_999, speed: 1 });
+    const spam: Controller = { decide: () => ({ kind: 'skill', skill }) };
+    const events = fight(named(a, '甲'), named(b, '乙'), `once-${skill}`, [spam, unarmedOnly()]);
+    const casts = events.filter(
+      (e) => e.kind === 'decide' && e.action.kind === 'skill' && e.action.skill === skill && !e.autoRelease,
+    );
+    assert.equal(casts.length, 1, `${skill} 只该被决策点出来一次`);
+    const skillEvents = events.filter((e) => e.kind === 'skill' && e.skill === skill);
+    assert.ok(skillEvents.length <= 2, `${skill} 的事件次数（鲸派气功多一条 release）`);
+  }
 });

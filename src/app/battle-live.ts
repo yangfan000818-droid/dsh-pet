@@ -116,6 +116,9 @@ const SKILL_EFFECT: Record<SkillId, string> = {
   'ghost-painting': '封住对方随机一门被动，本场失效；没有被动就改成伤害',
   'ghost-blood': '必中伤害，对方被动招式越多打得越重',
   'jelly-clone': '挨打时可能用水母替身挡下',
+  'tide-cannon': '聚气一拍，下一次出手自动放出必中水浪；聚气期间挨打减三成',
+  'abyss-field': '两次攻击内自己必中，并让对方每次出手前先挨暗流',
+  'shadow-step': '挨普通攻击全闪，自己下一次攻击必中',
 };
 
 /** 一项动作在面板 / AI 提示词里的名字 */

@@ -376,6 +376,11 @@ export const ATTACK_SHOW: Record<string, AttackShow> = {
   },
   // 回血：作用在自己身上，照旧播整段素材，没有飞行物
   bloom: { action: '招式-凭空生花' },
+  // X25 占位：正式素材留到 X25-B。聚气借用护身印的结印、领域借万我、瞬影借闪避；
+  // 鲸派气功的释放由时间线按 release 单独排「出手-降龙」+ 水浪
+  'tide-cannon': { action: '出手-护身印' },
+  'abyss-field': { action: '出手-万我' },
+  'shadow-step': { action: '战斗-闪避' },
   // 三种追加出手
   'spirit-beast': { action: '出手-召唤灵兽', fly: { kind: '灵兽', track: 'float', hitFx: '命中-泡泡' } },
   'sixth-sense': { action: '出手-第六感', fly: { kind: '手刀', track: 'line', hitFx: '命中-斩' } },
@@ -1059,6 +1064,13 @@ export function timeline(
 
     if (event.kind === 'decide') {
       closeSlot();
+      // 鲸派气功（X25）：蓄力后的自动释放不播这一手动作，释放由紧随其后的 skill 事件自己排，
+      // 不然聚气的护身印动作会闪一下又被降龙顶掉
+      if (event.autoRelease) {
+        overrideActor = null;
+        before = event.hp;
+        continue;
+      }
       const override = options?.decideLines?.get(i);
       overrideActor = override === undefined ? null : event.actor;
       const show = showOf(event.action, event.actor, foePrefix);
@@ -1328,6 +1340,19 @@ export function timeline(
         ...(line === undefined ? {} : { line }),
         hp: event.hp,
       });
+      continue;
+    }
+
+    // 鲸派气功释放（X25）：自动释放那一手没有 decide 动作，这里补「出手-降龙」+ 水浪，命中才掉血出台词
+    if (event.kind === 'skill' && event.skill === 'tide-cannon' && event.release) {
+      const anim = '出手-降龙';
+      const fly: Fly = { kind: '水浪', track: 'line', hitFx: '命中-水花' };
+      pushAnim({ at, who: event.actor, anim, rate: actionRate(anim), hp: hpBefore });
+      const impact = pushShot(at + releaseOffset(anim), event.actor, anim, fly, hpBefore);
+      const victim = (event.actor ^ 1) as 0 | 1;
+      if (!playDeadAfter(events, i)) pushReaction(impact, victim, HIT_ANIM, hpBefore);
+      steps.push({ at: impact, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
+      lastImpact = impact;
       continue;
     }
 
