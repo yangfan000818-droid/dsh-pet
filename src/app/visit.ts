@@ -350,6 +350,12 @@ export function isLanAddress(raw: string | undefined): boolean {
   );
 }
 
+/** 本机自己拨回来的连接：只有这些能取走群架邮箱里的报文 */
+export function isLoopback(raw: string | undefined): boolean {
+  const address = (raw ?? '').replace(/^::ffff:/, '');
+  return address === '::1' || /^127\./.test(address);
+}
+
 /** 设置页手动填的邻居：点分 IPv4（每段 0–255，不带前导零），而且是局域网地址；不合格整份配置拒收 */
 export function isPeerAddress(value: string): boolean {
   return isIPv4(value) && isLanAddress(value);
@@ -568,6 +574,11 @@ export type HostEvent =
 /** 一次最多捎几件事（攒多了丢最早的） */
 const EVENTS_MAX = 8;
 
+/** 群架的报文邮箱最多攒几封（一手一封，正常远达不到；攒满了丢最早的） */
+const BRAWL_INBOX_MAX = 64;
+/** `/v1/brawl/poll` 最多挂这么久（比一手的等时 35 秒短，让调用方自己续） */
+const BRAWL_POLL_MAX_MS = 30_000;
+
 /** /v1/spar 的应答：答应了带这边的名帖与随机数；拒绝带原因（unsupported-mode / version / bad-card 在协议层，off / busy / no-id 在 features.ts） */
 export type SparReply =
   | { ok: true; card: SparCard; nonce: string }
@@ -657,6 +668,13 @@ export interface HostHandlers {
   duelConceded(visitor: Visitor, reason: 'mismatch' | 'late'): void;
   /** 客人走了：leave = 告辞（text 是告别的话，可空）；lost = 太久没动静 */
   left(visitor: Visitor, reason: 'leave' | 'lost', text: string): void;
+  /**
+   * 群架（X27）的报文：房主或别的参战方发来的一封。协议层只看信封（brawl-net 的 to/from），
+   * 这里只答「收不收」——没开桌、这场已经收了就回 false。收了由 `/v1/brawl/poll` 取走。
+   */
+  brawlMsg?(msg: unknown, address: string): boolean;
+  /** 群架的桌：没开桌返回 null；开着就报现有参战方（客人据此算自己的编号） */
+  brawlLobby?(): { players: Array<{ id: number; name: string }> } | null;
 }
 
 interface Session {
@@ -724,6 +742,10 @@ export class VisitHost {
   private readonly duelAt = new Map<string, number>();
   /** 见过的 (客人 id, ts)：防有人把抄来的敲门请求原样再发一遍 */
   private readonly knocksSeen = new Map<string, number>();
+  /** 群架报文的邮箱：等各家来取（一条一手，量很小） */
+  private brawlInbox: unknown[] = [];
+  /** 挂着的 `/v1/brawl/poll`（新报文到了就叫醒） */
+  private readonly brawlWaiters = new Set<() => void>();
   /** 接待监听的端口（验签名、给应答签名都要拼进内容） */
   private listenPort = 0;
   private readonly handlers: HostHandlers;
@@ -773,6 +795,8 @@ export class VisitHost {
     if (this.duelSession?.timer) clearTimeout(this.duelSession.timer);
     this.duelSession = null;
     this.lastDuel = null;
+    for (const wake of [...this.brawlWaiters]) wake();
+    this.brawlWaiters.clear();
     const server = this.server;
     this.server = null;
     if (!server) return;
@@ -836,6 +860,14 @@ export class VisitHost {
     }
     if (path === '/v1/duel/reveal') return this.duelReveal(address, body, res);
     if (path === '/v1/duel/turn') return this.duelTurn(address, body, res);
+    // 群架（X27）：星型中继。收发报文和隔空切磋一样不用先串门；
+    // 报文只由本机自己取走（回环），局域网里的别人取不了别人家的信
+    if (path === '/v1/brawl/lobby') return this.brawlLobby(body, res);
+    if (path === '/v1/brawl/msg') return this.brawlMsg(address, body, res);
+    if (path === '/v1/brawl/poll') {
+      if (!isLoopback(address)) return send(res, 403, { ok: false, reason: 'forbidden' });
+      return this.brawlPoll(address, body, res);
+    }
 
     const session = this.session;
     if (!session || body.token !== session.token || address !== session.visitor.address) {
@@ -1129,6 +1161,50 @@ export class VisitHost {
     if (session.timer !== null) clearTimeout(session.timer);
   }
 
+  /** 群架的桌：开了就报现有参战方（客人按名单算自己该拿几号，再报名） */
+  private async brawlLobby(_body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    const table = this.handlers.brawlLobby?.();
+    if (!table) return send(res, 200, { ok: false, reason: 'no-table' });
+    return send(res, 200, { ok: true, players: table.players });
+  }
+
+  /** 群架报文：收不收由接线方答（没开桌就回 no-table），收了等本机来 poll 取走 */
+  private async brawlMsg(address: string, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    const msg = body.msg;
+    if (msg === undefined || msg === null || typeof msg !== 'object') {
+      return send(res, 400, { ok: false, reason: 'bad-request' });
+    }
+    if (!this.handlers.brawlMsg || !this.handlers.brawlMsg(msg, address)) {
+      return send(res, 200, { ok: false, reason: 'no-table' });
+    }
+    this.brawlInbox.push(msg);
+    if (this.brawlInbox.length > BRAWL_INBOX_MAX) this.brawlInbox.shift();
+    for (const wake of [...this.brawlWaiters]) wake();
+    this.brawlWaiters.clear();
+    return send(res, 200, { ok: true });
+  }
+
+  /** 群架报文：挂到有新报文或等满 waitMs 为止，取走并清空 */
+  private async brawlPoll(_address: string, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
+    const raw = Number(body.waitMs ?? 0);
+    const waitMs = Number.isFinite(raw) && raw > 0 ? Math.min(raw, BRAWL_POLL_MAX_MS) : 0;
+    if (this.brawlInbox.length === 0 && waitMs > 0) {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.brawlWaiters.delete(finish);
+          resolve();
+        };
+        const timer = setTimeout(finish, waitMs);
+        this.brawlWaiters.add(finish);
+      });
+    }
+    return send(res, 200, { ok: true, msgs: this.brawlInbox.splice(0) });
+  }
+
   /** 逐手局的隔空切磋一手（X19）：令牌与来源地址对上才交给 features；结构不对当 bad-request */
   private async duelTurn(address: string, body: Record<string, unknown>, res: ServerResponse): Promise<void> {
     const token = typeof body.token === 'string' ? body.token : '';
@@ -1373,6 +1449,52 @@ export async function sendNote(host: HostAddress, body: { token: string; text: s
   if (result.reason === 'not-friend' || result.reason === 'too-many' || result.reason === 'sent-home')
     return { ok: false, reason: result.reason };
   return { ok: false, reason: result.reason === 'not-found' ? 'old-host' : 'not-visiting' };
+}
+
+/** 群架报文发出去的结果：no-table = 对面没开桌（或这场已经收了）；old-host = 对面版本太旧 */
+export type BrawlMailReply = { ok: true } | { ok: false; reason: 'no-table' | 'bad-request' };
+
+export type BrawlLobbyReply =
+  { ok: true; players: Array<{ id: number; name: string }> } | { ok: false; reason: 'no-table' | 'unreachable' };
+
+/**
+ * 问一声「你家开群架桌了吗」：开着就报现有参战方，客人按名单算自己的编号。
+ * 连不上返回 unreachable（不抛错：菜单里挑一家不在线的邻居是常事）。
+ */
+export async function brawlLobbyOf(host: HostAddress, timeoutMs = 3_000): Promise<BrawlLobbyReply> {
+  try {
+    const result = await post(host, '/v1/brawl/lobby', {}, timeoutMs);
+    if (result.ok !== true || !Array.isArray(result.players)) return { ok: false, reason: 'no-table' };
+    const players = result.players
+      .map((item) => item as Record<string, unknown>)
+      .map((item) => ({ id: Number(item.id), name: String(item.name ?? '') }))
+      .filter((item) => Number.isInteger(item.id) && item.id >= 0);
+    return { ok: true, players };
+  } catch {
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * 发一封群架报文（X27）给某个参战方；连不上时抛错，由接线方按掉线处理。
+ * 信封本身（`to` / `from`）由 brawl-net 填，这里只负责递过去。
+ */
+export async function postBrawlMsg(host: HostAddress, msg: unknown, timeoutMs = 5_000): Promise<BrawlMailReply> {
+  const result = await post(host, '/v1/brawl/msg', { msg }, timeoutMs);
+  if (result.ok === true) return { ok: true };
+  const reason = typeof result.reason === 'string' ? result.reason : '';
+  // 旧版本没有这条路径：404 落成 not-found，和「没开桌」不是一回事，这里都归成收不到
+  return { ok: false, reason: reason === 'no-table' ? 'no-table' : 'bad-request' };
+}
+
+/**
+ * 取走这家的群架报文（没有就挂到 `waitMs`）。连不上抛错。
+ * 返回的报文是线上原样（`BrawlNetMsg`），由 brawl-net 的 `receive` 判要不要。
+ */
+export async function pollBrawlMsgs(host: HostAddress, waitMs: number, signal?: AbortSignal): Promise<unknown[]> {
+  const result = await post(host, '/v1/brawl/poll', { waitMs }, waitMs + 5_000, signal);
+  const msgs = result.msgs;
+  return Array.isArray(msgs) ? msgs : [];
 }
 
 /** /v1/spar 拒绝时客人那边要能说人话的全部原因（mismatch / late 只出现在 reveal 的应答里） */

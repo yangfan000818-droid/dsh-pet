@@ -46,6 +46,8 @@ export interface BrawlPeer {
   id: number;
   card: Fighter;
   nonce: string;
+  /** 名帖外的显示名（牌子上写的名字；不参与校验，缺了由接线方给个默认） */
+  name?: string;
 }
 
 export type BrawlRejectReason =
@@ -70,9 +72,17 @@ export type BrawlPhase = 'lobby' | 'running' | 'ended';
  * 每一手的字段与 `BrawlMove` 完全一致。
  */
 export type BrawlNetMsg =
-  | { kind: 'join'; from: number; to: number; version: number; card: Fighter; nonce: string }
+  | { kind: 'join'; from: number; to: number; version: number; card: Fighter; nonce: string; name?: string }
   | { kind: 'welcome'; from: number; to: number; id: number }
-  | { kind: 'start'; from: number; to: number; version: number; players: BrawlPeer[] }
+  | {
+      kind: 'start';
+      from: number;
+      to: number;
+      version: number;
+      players: BrawlPeer[];
+      /** 各家的收件地址（按编号对齐）：客人拿到以后才知道每一手要发给谁 */
+      addresses?: string[];
+    }
   | ({ kind: 'move'; from: number; to: number } & BrawlMove)
   | {
       kind: 'reject';
@@ -124,6 +134,8 @@ export interface BrawlNetOptions {
   self: number;
   card: Fighter;
   nonce: string;
+  /** 显示名（拼进 join 与 start，客人牌子上写这个名字） */
+  name?: string;
   /** 唯一的网络出口：不直接起 HTTP */
   send: (msg: BrawlNetMsg) => void;
   version?: number;
@@ -142,6 +154,8 @@ export interface BrawlNetOptions {
   onEnd?: (result: BrawlResult) => void;
   /** 轮到自己却迟迟没提交：接线方可以在这里补一手后备动作 */
   onTurnTimeout?: (actor: number) => void;
+  /** 房主用：某个编号的收件地址（拼进 `start` 发给客人；给不出就留空串） */
+  addressOf?: (id: number) => string | null;
 }
 
 export interface BrawlNet {
@@ -179,7 +193,7 @@ function cloneFighter(f: Fighter): Fighter {
 }
 
 function clonePeer(p: BrawlPeer): BrawlPeer {
-  return { id: p.id, card: cloneFighter(p.card), nonce: p.nonce };
+  return { id: p.id, card: cloneFighter(p.card), nonce: p.nonce, ...(p.name === undefined ? {} : { name: p.name }) };
 }
 
 function cloneAction(action: Action): Action {
@@ -253,7 +267,14 @@ class BrawlNetImpl implements BrawlNet {
     this.maxPlayers = Math.min(BRAWL_MAX, Math.max(BRAWL_MIN, options.maxPlayers ?? BRAWL_MAX));
     this.clock = options.clock ?? defaultClock;
     if (this.myId === 0) {
-      this.players = [{ id: 0, card: cloneFighter(options.card), nonce: options.nonce }];
+      this.players = [
+        {
+          id: 0,
+          card: cloneFighter(options.card),
+          nonce: options.nonce,
+          ...(options.name === undefined ? {} : { name: options.name }),
+        },
+      ];
     }
   }
 
@@ -298,6 +319,7 @@ class BrawlNetImpl implements BrawlNet {
       version: this.version,
       card: cloneFighter(this.opts.card),
       nonce: this.opts.nonce,
+      ...(this.opts.name === undefined ? {} : { name: this.opts.name }),
     });
   }
 
@@ -308,6 +330,7 @@ class BrawlNetImpl implements BrawlNet {
       throw new Error(`群架人数必须在 ${BRAWL_MIN}–${this.maxPlayers} 之间`);
     }
     this.begin(this.players, 0);
+    const addresses = this.players.map((p) => this.opts.addressOf?.(p.id) ?? '');
     for (const p of this.players) {
       if (p.id === this.myId) continue;
       this.send({
@@ -316,6 +339,7 @@ class BrawlNetImpl implements BrawlNet {
         to: p.id,
         version: this.version,
         players: this.players.map(clonePeer),
+        addresses: [...addresses],
       });
     }
   }
@@ -365,7 +389,12 @@ class BrawlNetImpl implements BrawlNet {
       this.sendReject(msg.from, -1, msg.from, 'id');
       return;
     }
-    this.players.push({ id: msg.from, card: cloneFighter(msg.card), nonce: msg.nonce });
+    this.players.push({
+      id: msg.from,
+      card: cloneFighter(msg.card),
+      nonce: msg.nonce,
+      ...(typeof msg.name === 'string' && msg.name ? { name: msg.name } : {}),
+    });
     this.send({ kind: 'welcome', from: this.hostId, to: msg.from, id: msg.from });
   }
 

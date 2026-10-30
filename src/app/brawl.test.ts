@@ -6,8 +6,10 @@ import {
   autoBrawlController,
   brawl,
   brawlNeedsTarget,
+  brawlUntilDecision,
   brawlWinner,
   legalBrawlActions,
+  type BrawlAction,
   type BrawlController,
   type BrawlEvent,
   type BrawlFighter,
@@ -166,4 +168,44 @@ test('群架：自增益招判定与合法动作清单', () => {
   assert.ok(actions.some((a) => a.kind === 'weapon'));
   assert.ok(actions.some((a) => a.kind === 'skill' && a.skill === 'bloom'));
   assert.ok(actions.some((a) => a.kind === 'skill' && a.skill === 'blue-whale'));
+});
+
+test('分步群架：全自动与整场 brawl() 打出同一串事件', () => {
+  for (const n of [2, 3, 4, 5]) {
+    const fighters = roster(n, 21 + n);
+    const whole = brawl(fighters, 'step-seed');
+    const step = brawlUntilDecision(fighters, 'step-seed', fighters.map(() => 'auto' as const));
+    assert.deepEqual(step.events, whole, `${n} 人`);
+    assert.equal(step.need, null, '全自动一路打到底');
+  }
+});
+
+test('分步群架：按收到的一手一手喂进去，事件与整场一致', () => {
+  const fighters = roster(4, 33);
+  const seed = 'step-feed';
+  const rng = rngFrom(`${seed}:decide`);
+  const controllers = fighters.map(() => autoBrawlController(rng));
+  const whole = brawl(fighters, seed, controllers);
+  // 整场里每一手（按顺序），联机时就是各家广播过来的那些
+  const expected = whole.filter(
+    (e): e is Extract<BrawlEvent, { kind: 'decide' }> => e.kind === 'decide' && !('autoRelease' in e),
+  );
+  const moves: BrawlAction[][] = fighters.map(() => []);
+  let events: BrawlEvent[] = [];
+  let cursor = 0;
+  let need = brawlUntilDecision(fighters, seed, moves).need;
+  for (let guard = 0; need && guard < 200; guard += 1) {
+    const decision = expected[cursor];
+    assert.ok(decision, `第 ${cursor} 手`);
+    assert.equal(decision.actor, need.id, '停下来的正好是轮到的那一方');
+    assert.equal(need.view.self, need.id, '视野里的自己');
+    moves[need.id].push(decision.action);
+    const step = brawlUntilDecision(fighters, seed, moves);
+    events = step.events;
+    need = step.need;
+    cursor += 1;
+  }
+  assert.equal(need, null, '能够打到收场');
+  assert.deepEqual(events, whole, '分步重算与整场事件一致');
+  assert.equal(cursor, expected.length, '每一手都喂到了');
 });

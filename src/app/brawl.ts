@@ -242,6 +242,8 @@ export function brawl(
   seed: string,
   controllers?: readonly BrawlController[],
   options: BrawlOptions = {},
+  /** 事件写进这个数组（分步重放时由外层持有，中途停下也能拿到已经打出来的部分） */
+  out: BrawlEvent[] = [],
 ): BrawlEvent[] {
   if (fighters.length < BRAWL_MIN || fighters.length > BRAWL_MAX) {
     throw new Error(`群架人数必须在 ${BRAWL_MIN}–${BRAWL_MAX} 之间`);
@@ -270,7 +272,7 @@ export function brawl(
 
   const sides = ordered.map((f) => makeBrawlSide(f, f.id, 0.8 + 0.4 * rng()));
   const byId = new Map(sides.map((s) => [s.id, s]));
-  const events: BrawlEvent[] = [];
+  const events = out;
   const hpNow = (): number[] => sides.map((s) => s.hp);
   const aliveSide = (s: BrawlSide): boolean => s.hp > 0 && !s.out;
   const aliveIds = (): number[] => sides.filter(aliveSide).map((s) => s.id);
@@ -1110,6 +1112,69 @@ export function autoBrawlController(rng: () => number): BrawlController {
       return { ...action, target: brawlNeedsTarget(action) ? foe.id : view.self };
     },
   };
+}
+
+/** 一方的动作来源：`'auto'` 自动出招；数组是按顺序记下来的每一手（联机逐手 / 分步演出用） */
+export type BrawlActionSource = 'auto' | readonly BrawlAction[];
+
+/** 停在哪一方的第几手上等决策 */
+export interface BrawlDecisionNeed {
+  id: number;
+  view: BrawlView;
+}
+
+export interface BrawlUntilDecision {
+  /** 已经打出来的事件（不含这一手） */
+  events: BrawlEvent[];
+  /** 要等的那一手；null = 整场打完了 */
+  need: BrawlDecisionNeed | null;
+}
+
+/** 「要决策但那一方的动作串已经用完」的内部信号，不外泄 */
+class BrawlDecisionNeeded {
+  readonly need: BrawlDecisionNeed;
+  constructor(need: BrawlDecisionNeed) {
+    this.need = need;
+  }
+}
+
+/**
+ * 分步群架（联机逐手用）：照 1v1 `fightUntilDecision` 的走法——重放到缺决策处，
+ * 外层把这一手补进动作串、**从头再算一遍**。引擎保持同步、纯函数。
+ *
+ * 两边都是 `'auto'` 时与 `brawl()` 打出同一串事件；某方给了一串定好的动作时，
+ * 轮到它、串用完就停下返回 `need`（`events` 是停之前已经打完的部分）。
+ */
+export function brawlUntilDecision(
+  fighters: readonly BrawlFighter[],
+  seed: string,
+  sources: readonly BrawlActionSource[],
+  options: BrawlOptions = {},
+): BrawlUntilDecision {
+  if (sources.length !== fighters.length) throw new Error('动作来源数量与人数对不上');
+  const decideRng = rngFrom(seed + ':decide');
+  let need: BrawlDecisionNeed | null = null;
+  const controllers = sources.map((source, id): BrawlController => {
+    if (source === 'auto') return autoBrawlController(decideRng);
+    let index = 0;
+    return {
+      decide(view: BrawlView): BrawlAction {
+        if (index >= source.length) {
+          need = { id, view };
+          throw new BrawlDecisionNeeded(need);
+        }
+        return source[index++];
+      },
+    };
+  });
+  const events: BrawlEvent[] = [];
+  try {
+    brawl(fighters, seed, controllers, options, events);
+  } catch (error) {
+    if (error instanceof BrawlDecisionNeeded) return { events, need };
+    throw error;
+  }
+  return { events, need: null };
 }
 
 /** 在「最残的一档」里随机挑一个目标：残血优先，但同档分散，不按编号集火 */

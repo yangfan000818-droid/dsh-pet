@@ -7,7 +7,7 @@
  */
 import { BRAWL_MAX, BRAWL_MIN, type BrawlFighter } from '../brawl';
 import { runBrawl } from '../brawl-run';
-import { CLOSE_HOLD_MS, lazyFns } from './context';
+import { CLOSE_HOLD_MS, MENU_BRAWL_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
 import { errorText } from './util';
 
@@ -25,9 +25,6 @@ const SHADOW_FILTERS = [
 ];
 /** 演出锁的时长：群架可能打上几分钟，先按 10 分钟占住，演完立刻放（实际按 TTL 上限兜底） */
 const BRAWL_HOLD_MS = 10 * 60_000;
-/** 右键菜单里的分组名：根菜单只占一项「群架」，人数在子菜单里选 */
-const BRAWL_GROUP = '群架';
-
 export interface Brawl {
   /** 菜单里的群架项（「群架/3 人」这类带分组的标签）；修炼关着时为空 */
   brawlActions(): Map<string, () => unknown>;
@@ -89,7 +86,12 @@ export function createBrawl(ctx: FeatureContext): Brawl {
           log,
         },
         fighters,
-        { fxBase: `${deps.petBase}/pic/fx/`, closeHoldMs: 800, idle: SHADOW_IDLE, filter: (f) => SHADOW_FILTERS[f.id] ?? '' },
+        {
+          fxBase: `${deps.petBase}/pic/fx/`,
+          closeHoldMs: 800,
+          idle: SHADOW_IDLE,
+          filter: (f) => SHADOW_FILTERS[f.id] ?? '',
+        },
       );
       log(`群架演示：${total} 人，${events.length} 个事件`);
       done = true;
@@ -109,7 +111,7 @@ export function createBrawl(ctx: FeatureContext): Brawl {
     if (!cultivationOn()) return actions;
     // 放「群架」子菜单：根菜单只占一项，人数进去再选（3 / 4 / 5 各一个按钮，摆出来就定了）
     for (const n of [3, 4, 5]) {
-      actions.set(`${BRAWL_GROUP}/${n} 人`, () => void runBrawlDemo(n));
+      actions.set(`${MENU_BRAWL_GROUP}/${n} 人`, () => void runBrawlDemo(n));
     }
     return actions;
   }

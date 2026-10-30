@@ -509,6 +509,13 @@ export interface FeatureFunctions {
   /** 群架（X27）：「修炼」子菜单里的 3 / 4 / 5 人演示项 */
   brawlActions(): Map<string, () => unknown>;
   runBrawlDemo(count?: number): Promise<void>;
+  /** 群架联机（X27 B4）：开桌 / 加入邻居 / 开打 / 散场 */
+  brawlLiveActions(): Map<string, () => unknown>;
+  /** 群架报文入口：VisitHost 收到别人的报文 / 问「开桌了吗」时来问这里 */
+  brawlMsg(msg: unknown, address: string): boolean;
+  brawlLobby(): { players: Array<{ id: number; name: string }> } | null;
+  /** 收掉联机的桌（应用退出时） */
+  closeBrawlLive(): void;
   wantedLabels(): string[];
   refreshMenu(force?: boolean): Promise<void>;
   pollMenu(): Promise<void>;
@@ -538,6 +545,8 @@ export interface FeatureContext {
 export const MENU_VISIT_GROUP = '串门';
 /** 「修炼」子菜单：和「串门」一样按前缀收成子菜单 */
 export const MENU_CULTIVATION_GROUP = '修炼';
+/** 「群架」子菜单：本地演示与联机共用这一组（3 / 4 / 5 人、联机开桌、加入邻居） */
+export const MENU_BRAWL_GROUP = '群架';
 /** 打完到关掉心魔窗口 / 擂台之间的停顿（§X14：1 秒——run() 结束时收场动作只剩约 0.6 秒，停这么久正好播完） */
 export const CLOSE_HOLD_MS = 1_000;
 

@@ -45,6 +45,7 @@ import { loadVisitIdentity, resetVisitIdentity } from './visit-identity';
 import { watchHomePet } from './visit-windows';
 import { createAdventureGlue } from './features/adventure-glue';
 import { createBrawl } from './features/brawl';
+import { createBrawlLiveFeature } from './features/brawl-live';
 import type { AppFeatures, FeatureContext, FeatureDeps, FeatureState, FeatureFunctions } from './features/context';
 import { createDiaryGlue } from './features/diary-glue';
 import { createDuel } from './features/duel';
@@ -157,6 +158,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
   Object.assign(fns, createSpar(ctx));
   Object.assign(fns, createDuel(ctx));
   Object.assign(fns, createBrawl(ctx));
+  Object.assign(fns, createBrawlLiveFeature(ctx));
   Object.assign(fns, createVisiting(ctx));
   Object.assign(fns, createVisitingChat(ctx));
   Object.assign(fns, createVisitingMenu(ctx));
@@ -246,6 +248,8 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
       fns.closeAdventureShows(0);
       // 在别人家做客：告个辞（不等）；家里的客人窗口关掉
       void fns.comeHome('called');
+      // 联机群架：桌子收掉，轮询停掉
+      fns.closeBrawlLive();
       if (state.hosting && state.hosting.openerTimer !== null) clearTimeout(state.hosting.openerTimer);
       state.hosting?.window.close(0);
       state.neighborhood?.stop();

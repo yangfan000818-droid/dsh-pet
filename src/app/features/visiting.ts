@@ -69,6 +69,8 @@ export function createVisiting(ctx: FeatureContext): Visiting {
     say,
     skipTrial,
     speak,
+    brawlLobby,
+    brawlMsg,
     talk,
   } = lazyFns(ctx);
   const { deps, log, electron, tracker, diary, neighbors, homePet } = ctx;
@@ -247,6 +249,13 @@ export function createVisiting(ctx: FeatureContext): Visiting {
         ctx.state.hosting.window.say(`${visitor.owner} 托我带话：${text}`, NOTE_BUBBLE_MS);
       diary.note(Date.now(), 'visit', `${visitor.owner} 托 ${visitor.pet} 带来一句话`);
       return true;
+    },
+    // 群架（X27 B4）：星型中继的报文邮箱，收不收由 brawl-live 按有没有开桌答
+    brawlMsg(msg, address) {
+      return brawlMsg(msg, address);
+    },
+    brawlLobby() {
+      return brawlLobby();
     },
     // 切磋（X5）：协议层已验过模式、版本与名帖；关不关、忙不忙、认不认得客人在这边答。
     // 逐手局（X19）多一个 live：这边要在自己的出招面板里选自家方式

@@ -190,6 +190,32 @@ test('联机：开桌 + 加入，各方算出的种子一致', () => {
   }
 });
 
+test('联机：房主把各家的收件地址塞进 start，客人按编号取得到（不知道的留空串）', () => {
+  const clock = new FakeClock();
+  const bus = makeBus();
+  const addresses = ['http://10.0.0.1:7340', 'http://10.0.0.2:7340', null];
+  const host = party(bus, clock, 0);
+  const guests = [1, 2].map((id) => party(bus, clock, id));
+  // 房主的 net 已经建好，addressOf 只能在建的时候给：重建一个带地址的房主
+  host.net.dispose();
+  const withAddresses = createBrawlNet({
+    self: 0,
+    card: fighterFor(0),
+    nonce: nonceOf(0),
+    clock,
+    send: bus.send,
+    addressOf: (id) => addresses[id] ?? null,
+  });
+  bus.register(0, withAddresses);
+  for (const g of guests) g.net.join();
+  withAddresses.start();
+  const starts = bus.log.filter((msg): msg is Extract<BrawlNetMsg, { kind: 'start' }> => msg.kind === 'start');
+  assert.equal(starts.length, 2, '每个客人各收一份 start');
+  for (const msg of starts) {
+    assert.deepEqual(msg.addresses, ['http://10.0.0.1:7340', 'http://10.0.0.2:7340', '']);
+  }
+});
+
 test('联机：人数不足 / 版本不同 / 满员拒入', () => {
   const clock = new FakeClock();
   const bus = makeBus();

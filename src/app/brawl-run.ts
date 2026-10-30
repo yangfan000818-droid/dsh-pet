@@ -52,6 +52,11 @@ export interface BrawlRunOptions {
   seed?: string;
   /** 每只的控制器；缺省在 `brawl()` 里用 `autoBrawlController` */
   controllers?: readonly BrawlController[];
+  /**
+   * 已经定下来的整场事件（联机：各家按网络上的选择重放出来的那一串）。
+   * 给了就不在这里跑引擎——联机时引擎已经跑过了，再跑一遍只会另开一份随机数。
+   */
+  events?: readonly BrawlEvent[];
   /** 传给 `brawl()` 的规则选项（切磋节奏 / 出手上限等） */
   brawl?: BrawlOptions;
   /** 2 人局交给现有 1v1：直接返回空事件，由调用方走 `runSparShow`（本函数不实现 1v1） */
@@ -74,6 +79,11 @@ export interface BrawlRunOptions {
   selfSize?: { width: number; height: number };
   /** 环形摆位的尺寸覆盖（基准宽度 / 最小宽度 / 各人数比例） */
   sizing?: BrawlWindowSizing;
+  /**
+   * 本机宠物是几号（缺省 0）。本地演示里 0 号就是自己；联机时房主 0、客人 1..N-1，
+   * 每家都把自己那只摆到环的 6 点钟，其余按编号顺时针排。
+   */
+  self?: number;
 }
 
 const DEFAULT_SELF_SIZE = { width: 320, height: 180 };
@@ -137,6 +147,9 @@ export function runBrawl(
   const timers = host.timers ?? realTimers;
   const ordered = [...fighters].sort((a, b) => a.id - b.id);
   const count = ordered.length;
+  const self = options.self ?? 0;
+  /** 编号 → 环上第几格（0 格是 6 点钟，本机宠物在那儿） */
+  const slot = (id: number): number => (id - self + count) % count;
   const names = ordered.map((fighter) => fighter.name);
   const foes = new Map<number, FoeWindow>();
   let arena: BrawlArena | null = null;
@@ -196,9 +209,9 @@ export function runBrawl(
     // 环被夹进工作区后，6 点钟不一定还是宠物原来的位置（宠物贴着屏幕边时差得很远）。
     // 用户定的规矩是「放不下先挪宠物」，把本机宠物挪到 0 号位，演完再挪回原位。
     const union = screenUnion(host.electron.screen);
-    const slot = layout.rects[0];
+    const home = layout.rects[slot(self)];
     if (box && union && host.moveSelf) {
-      const target = { x: slot.x + slot.width / 2, y: slot.y + slot.height / 2 };
+      const target = { x: home.x + home.width / 2, y: home.y + home.height / 2 };
       if (Math.hypot(target.x - center.x, target.y - center.y) > SELF_MOVE_TOLERANCE) {
         const ratio = (point: { x: number; y: number }): { x: number; y: number } => ({
           x: Math.min(1, Math.max(0, (point.x - union.x) / union.width)),
@@ -215,9 +228,10 @@ export function runBrawl(
       }
     }
 
-    // 2. 编号 1..N-1：各开一个对手窗口，钉住跟随并挪到环上；0 号仍由本机宠物自己演
-    for (let id = 1; id < count; id += 1) {
-      const fighter = ordered[id];
+    // 2. 除本机那一号以外：各开一个对手窗口，钉住跟随并挪到环上；本机那号仍由宠物自己演
+    for (const fighter of ordered) {
+      const id = fighter.id;
+      if (id === self) continue;
       const foe = openFoeWindow(
         host.electron,
         host.pages.foe,
@@ -235,9 +249,9 @@ export function runBrawl(
       );
       foes.set(id, foe);
       foe.pin(true);
-      foe.moveTo(foeWindowRect(layout.rects[id]));
+      foe.moveTo(foeWindowRect(layout.rects[slot(id)]));
       // 围圈：每一只都朝环心（左半环朝右、右半环朝左）
-      foe.face(layout.facing[id]);
+      foe.face(layout.facing[slot(id)]);
     }
 
     // 3. 环心记分板
@@ -251,16 +265,16 @@ export function runBrawl(
 
     // 4. 特效层：stages 按编号取当前舞台；0 号用本机宠物的真实舞台（它没有被缩放成环上的小窗）
     // 开场先朝第一个对手那一侧，之后每次出手再按实际目标转
-    const firstFoe = layout.rects[1];
-    let selfFacing: 'left' | 'right' =
-      firstFoe && firstFoe.x + firstFoe.width / 2 < center.x ? 'left' : 'right';
+    const other = ordered.find((fighter) => fighter.id !== self);
+    const firstFoe = other ? layout.rects[slot(other.id)] : null;
+    let selfFacing: 'left' | 'right' = firstFoe && firstFoe.x + firstFoe.width / 2 < center.x ? 'left' : 'right';
     const stageOf = (id: number): Stage | null => {
-      if (id === 0) {
+      if (id === self) {
         const now = host.home();
         return now ? homeStage(now, selfFacing) : brawlStageOf(layout.rects[0], layout.facing[0]);
       }
       const foe = foes.get(id);
-      return foe ? brawlStageOf(foe.bounds(), layout.facing[id]) : null;
+      return foe ? brawlStageOf(foe.bounds(), layout.facing[slot(id)]) : null;
     };
     const stagesNow = (): (Stage | null)[] => ordered.map((_, id) => stageOf(id));
     fx = openFxWindow(
@@ -274,14 +288,14 @@ export function runBrawl(
 
     // 5. 内核 + 时间线，按 at 依次执行
     const seed = options.seed ?? `${count}:${names.join('|')}`;
-    const events = brawl(ordered, seed, options.controllers, options.brawl);
+    const events = options.events ? [...options.events] : brawl(ordered, seed, options.controllers, options.brawl);
     const steps = brawlTimeline(events, names);
 
     let activeStep: BrawlStep | null = null;
     let activeId = -1;
     const sides: BrawlSides = {
       side(id) {
-        if (id === 0) {
+        if (id === self) {
           return {
             play: (anim, rate) => host.playExtra(anim, { facing: selfFacing, rate }),
             say: (line, ms) => host.say(line, ms),
@@ -322,9 +336,9 @@ export function runBrawl(
               try {
                 activeStep = step;
                 activeId = step.who;
-                if (step.who === 0 && step.target !== undefined && step.target !== 0) {
+                if (step.who === self && step.target !== undefined && step.target !== self) {
                   const all = stagesNow();
-                  const from = all[0];
+                  const from = all[self];
                   const to = all[step.target] ?? null;
                   if (from && to) {
                     selfFacing = to.x + to.width / 2 < from.x + from.width / 2 ? 'left' : 'right';

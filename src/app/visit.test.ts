@@ -6,6 +6,7 @@ import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { NetworkInterfaceInfo } from 'node:os';
 import {
+  brawlLobbyOf,
   broadcastAddresses,
   cardFighter,
   cleanText,
@@ -23,6 +24,8 @@ import {
   parseSparCard,
   parseTurnIndex,
   PING_MS,
+  pollBrawlMsgs,
+  postBrawlMsg,
   randomSparNonce,
   sendDuel,
   sendDuelReveal,
@@ -2052,6 +2055,71 @@ test('隔空切磋逐手局：/v1/duel/turn 用应战后留着的令牌；自动
         ok: false,
         reason: 'not-visiting',
       });
+    },
+  );
+});
+
+test('群架的桌：没开桌回 no-table，开着报参战方；连不上的地址返回 unreachable', async () => {
+  let table: { players: Array<{ id: number; name: string }> } | null = null;
+  await withHost(
+    {
+      brawlMsg: () => !!table,
+      brawlLobby: () => table,
+    },
+    async (_host, port) => {
+      const box = { address: '127.0.0.1', port };
+      assert.deepEqual(await brawlLobbyOf(box), { ok: false, reason: 'no-table' });
+      table = {
+        players: [
+          { id: 0, name: '阿黄' },
+          { id: 1, name: '小白' },
+        ],
+      };
+      assert.deepEqual(await brawlLobbyOf(box), {
+        ok: true,
+        players: [
+          { id: 0, name: '阿黄' },
+          { id: 1, name: '小白' },
+        ],
+      });
+      // 没人听的端口：不抛错，直接 unreachable
+      assert.deepEqual(await brawlLobbyOf({ address: '127.0.0.1', port: 1 }, 500), {
+        ok: false,
+        reason: 'unreachable',
+      });
+    },
+  );
+});
+
+test('群架报文邮箱：没开桌回 no-table；开桌后发两封能一次取走，取空了再挂就返回空', async () => {
+  let open = false;
+  const got: unknown[] = [];
+  await withHost(
+    {
+      brawlMsg: (msg) => {
+        if (!open) return false;
+        got.push(msg);
+        return true;
+      },
+    },
+    async (_host, port) => {
+      const box = { address: '127.0.0.1', port };
+      const before = await postBrawlMsg(box, { kind: 'join', from: 1, to: 0 });
+      assert.deepEqual(before, { ok: false, reason: 'no-table' });
+      open = true;
+      assert.deepEqual(await postBrawlMsg(box, { kind: 'join', from: 1, to: 0 }), { ok: true });
+      assert.deepEqual(await postBrawlMsg(box, { kind: 'move', from: 1, to: 0, index: 0 }), { ok: true });
+      assert.equal(got.length, 2, '接线方收到了两封');
+      const first = await pollBrawlMsgs(box, 0);
+      assert.deepEqual(first, [
+        { kind: 'join', from: 1, to: 0 },
+        { kind: 'move', from: 1, to: 0, index: 0 },
+      ]);
+      // 取空了：挂 100ms 没新报文就返回空
+      const started = Date.now();
+      const second = await pollBrawlMsgs(box, 100);
+      assert.deepEqual(second, []);
+      assert.ok(Date.now() - started >= 80, '确实挂了一会儿');
     },
   );
 });
