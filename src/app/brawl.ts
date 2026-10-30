@@ -224,6 +224,11 @@ export interface BrawlOptions {
   spar?: boolean;
   /** 人数少时也允许同一时刻按编号串行，默认就是 */
   maxActions?: number;
+  /**
+   * 退场清单（认输 / 掉线）：`id` 在自己第 `at` 手之前退场（`at` = 他已经出过的手数）。
+   * 联机时各家拿同一份清单，事件序列照样一致。
+   */
+  forfeits?: ReadonlyArray<{ id: number; at: number }>;
 }
 
 function makeBrawlSide(f: BrawlFighter, id: number, delay: number): BrawlSide {
@@ -986,6 +991,13 @@ export function brawl(
   // 主循环：按遁速时间轴取 next 最小的活人；同一时刻按编号升序串行
   // -------------------------------------------------------------------------
   const isDone = (): boolean => aliveIds().length <= 1;
+  // 退场：编号 → 在第几手之前退（他自己已经出过几手）；每次有人退场都按同一份清单演
+  const forfeits = new Map((options.forfeits ?? []).map((entry) => [entry.id, entry.at]));
+  const decided = new Map<number, number>();
+  const shouldForfeit = (side: BrawlSide): boolean => {
+    const at = forfeits.get(side.id);
+    return at !== undefined && at === (decided.get(side.id) ?? 0);
+  };
 
   while (!isDone() && actions < maxActions) {
     let self: BrawlSide | null = null;
@@ -997,13 +1009,21 @@ export function brawl(
     const me = self;
     const now = me.next;
     actions += 1;
-    if (me.skip) {
+    if (shouldForfeit(me)) {
+      // 认输 / 掉线：退出排序，留在原地当观众；不再是目标，也不再有 ko（淘汰记账在这里补上）
+      me.out = true;
+      eliminated.add(me.id);
+      me.eliminatedAt = actions;
+      events.push({ actor: me.id, kind: 'forfeit', target: me.id, hp: hpNow() });
+      me.next = now + intervalOf(me);
+    } else if (me.skip) {
       me.skip = false;
       events.push({ actor: me.id, kind: 'skip', cause: me.skipCause, hp: hpNow() });
       me.skipCause = 'stun';
       me.next = now + intervalOf(me);
     } else {
       me.controlled = false;
+      decided.set(me.id, (decided.get(me.id) ?? 0) + 1);
       const done = takeAction(me, firstAliveOther(me)?.id ?? me.id);
       const heavy =
         (done.kind === 'weapon' && WEAPONS[done.weapon].heavy) || (done.kind === 'move' && MOVES[done.move].heavy);

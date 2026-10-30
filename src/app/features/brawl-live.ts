@@ -11,14 +11,20 @@
  * 传输走串门接待服务器的 `/v1/brawl/*`：一封网络报文 = 一次 POST，收件方自己长轮询取走。
  * 两家都得开着「允许别人来串门」（接待端口），否则收不到报文。
  */
-import { rngFrom } from '../battle';
+import { rngFrom, type Action } from '../battle';
+import { openActionPanel, type ActionPanelWindow, type PanelAction } from '../action-panel-window';
+import { actionEffect, actionLabel, toneOf } from '../battle-live';
 import {
   BRAWL_MAX,
   autoBrawlController,
   brawlFighterOf,
+  brawlNeedsTarget,
   brawlWinner,
+  legalBrawlActions,
+  type BrawlAction,
   type BrawlEvent,
   type BrawlFighter,
+  type BrawlView,
 } from '../brawl';
 import { createBrawlLive, type BrawlLive } from '../brawl-live';
 import { createBrawlNet, type BrawlNet, type BrawlNetMsg, type BrawlNetState } from '../brawl-net';
@@ -42,6 +48,10 @@ const LIVE_FILTERS = [
 const LIVE_HOLD_MS = 10 * 60_000;
 /** 本机邮箱长轮询一次挂多久（服务器上限 30 秒） */
 const POLL_WAIT_MS = 15_000;
+/** 第一次轮到自己时问「怎么出招」等多久；超时按自动 */
+const MODE_MS = 10_000;
+/** 手动一手等多久；超时按后备自动挑一手 */
+const TURN_MS = 20_000;
 /** 菜单里最多列几家的「加入」项：菜单总共就 20 项，串门与切磋项还占着位置 */
 const JOIN_ITEMS_MAX = 2;
 
@@ -59,6 +69,12 @@ interface LiveTable {
   abort: AbortController;
   /** 开演以后不再收报文 */
   showing: boolean;
+  /** 本机这一场怎么出招：开打后第一次轮到自己时选，null = 还没选 */
+  mode: 'auto' | 'manual' | null;
+  /** 出招面板（第一次轮到本机时才开） */
+  panel: ActionPanelWindow | null;
+  /** 手动面板正等着玩家点：别重复问 */
+  asking: boolean;
 }
 
 /** `http://10.0.0.2:7340` → { address, port }；格式不对返回 null */
@@ -109,10 +125,11 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     return true;
   }
 
-  /** 报文出站：房主按编号查地址，客人一律发房主 */
+  /** 报文出站：房主按编号查地址，客人一律发房主（房主移交后，接任的客人也按房主发） */
   function sendFor(current: LiveTable) {
     return (msg: BrawlNetMsg): void => {
-      const to = current.role === 'host' ? current.peers.get(msg.to) : current.host;
+      const hosting = current.net.self === current.net.host;
+      const to = hosting ? current.peers.get(msg.to) : current.host;
       if (!to) return;
       // join 再带一个「往哪儿回」的端口：房主按来源地址 + 这个端口拼回信地址
       const body: Record<string, unknown> = msg.kind === 'join' ? { ...msg, port: ctx.state.hostPort } : { ...msg };
@@ -164,20 +181,29 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     const seed = state.seed ?? '';
     const controllers = new Map(fighters.map((f) => [f.id, autoBrawlController(rngFrom(`${seed}:pick:${f.id}`))]));
     let driver: BrawlLive | null = null;
+    /** 交给网络：房主直接广播，客人发给房主；这一手经网络回到本地才推进定手 */
+    const submit = (target: number, action: Action): void => {
+      try {
+        current.net.submitMove(target, action);
+      } catch (error) {
+        log(`群架：这一手没交出去：${errorText(error)}`);
+        driver?.retry();
+      }
+    };
     driver = createBrawlLive({
       fighters,
       seed,
       self: state.self,
-      choose: (view) =>
-        (controllers.get(view.self) ?? autoBrawlController(rngFrom(`${seed}:pick:${view.self}`))).decide(view),
-      submit: (target, action) => {
-        try {
-          current.net.submitMove(target, action);
-        } catch (error) {
-          log(`群架：这一手没交出去：${errorText(error)}`);
-          driver?.retry();
-        }
+      choose: (view) => {
+        // 自动这一手先算好：手动时它就是超时 / 点歪的兜底
+        const auto = (controllers.get(view.self) ?? autoBrawlController(rngFrom(`${seed}:pick:${view.self}`))).decide(
+          view,
+        );
+        if (current.mode === 'auto') return auto;
+        void askTurn(current, view, auto, submit);
+        return null;
       },
+      submit,
     });
     current.fighters = fighters;
     current.driver = driver;
@@ -190,6 +216,10 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     const driver = current.driver;
     if (!fighters || !driver || current.showing) return;
     current.showing = true;
+    // 出招面板收掉，环和记分板要上场了
+    current.panel?.close();
+    if (ctx.state.actionPanel === current.panel) ctx.state.actionPanel = null;
+    current.panel = null;
     const events: BrawlEvent[] = driver.events();
     const names = fighters.map((f) => f.name);
     const origin = new URL(deps.petBase).origin;
@@ -237,15 +267,22 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
   }
 
   /**
-   * 定手阶段有人掉线 / 认输：这一场作罢（各家一起收摊）。
-   * 引擎还不会「认输就退场」，硬接着打会演成出错的名次——不如直接散场，下次再来。
+   * 定手阶段有人掉线 / 认输：引擎按「退场」把人移出排序，剩下的人接着打（各家套同一份清单）。
+   * 还没开打（i.e. 桌还在 lobby）就有人走了：这张桌散了。
    */
   function lostBeforeShow(current: LiveTable, id: number): void {
     if (current.showing || table !== current) return;
     const name = current.net.state().players.find((p) => p.id === id)?.name || `对手${id + 1}`;
-    log(`群架联机：${name} 掉线，这一场作罢`);
-    void say(`${name} 掉线了，这场群架先散了吧～`);
-    closeTable(current);
+    log(`群架联机：${name} 退场`);
+    if (!current.driver) {
+      void say(`${name} 走了，这张群架桌散了吧～`);
+      closeTable(current);
+      void refreshMenu();
+      return;
+    }
+    void say(`${name} 退场了，剩下的人接着打～`);
+    current.driver.out(id);
+    if (current.driver.done()) void show(current);
     void refreshMenu();
   }
 
@@ -254,6 +291,82 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     table = null;
     current.abort.abort();
     current.net.dispose();
+    current.panel?.close();
+    if (ctx.state.actionPanel === current.panel) ctx.state.actionPanel = null;
+    current.panel = null;
+  }
+
+  /** 第一次轮到本机：问「自动 / 手动」，再按这个方式出招；自动的那一手当作兜底 */
+  async function askTurn(
+    current: LiveTable,
+    view: BrawlView,
+    auto: BrawlAction,
+    submit: (target: number, action: Action) => void,
+  ): Promise<void> {
+    if (current.asking || table !== current) return;
+    current.asking = true;
+    try {
+      if (!current.panel) {
+        current.panel = openActionPanel(
+          electron,
+          `${new URL(deps.petBase).origin}/app/panel`,
+          () => null,
+          homePet.box,
+          () => null,
+        );
+        ctx.state.actionPanel = current.panel;
+      }
+      const panel = current.panel;
+      if (current.mode === null) {
+        const picked = await panel.chooseMode(false, MODE_MS);
+        // 面板被关掉 / 超时：这一场按自动打完，别卡着整桌人的定手
+        current.mode = picked === 'manual' ? 'manual' : 'auto';
+      }
+      if (table !== current) return;
+      if (current.mode === 'auto') {
+        submit(auto.target, auto);
+        return;
+      }
+      const actions = legalBrawlActions(view);
+      const rows: PanelAction[] = actions.map((action) => ({
+        label: actionLabel(action),
+        effect: actionEffect(action, true),
+        tone: toneOf(action),
+      }));
+      const pick = await panel.chooseAction(rows, TURN_MS, { title: '轮到你了，出一手' });
+      // 桌已经散了（面板被关掉时 pick 回 null）：这一手不用再交
+      if (table !== current) return;
+      const action = pick === null ? undefined : actions[pick];
+      if (!action) {
+        submit(auto.target, auto);
+        return;
+      }
+      // 自增益招不用选目标；只剩一个活人时也不问（直接打他）
+      let target = view.self;
+      if (brawlNeedsTarget(action)) {
+        const foes = view.foes;
+        const names = new Map((current.fighters ?? []).map((f) => [f.id, f.name]));
+        if (foes.length === 1) {
+          target = foes[0].id;
+        } else {
+          const labels = foes.map((foe) => `${names.get(foe.id) ?? `对手${foe.id + 1}`}（血 ${foe.hp}/${foe.maxHp}）`);
+          const who = await panel.choosePrompt('打谁？', labels, TURN_MS);
+          const picked = who === null ? undefined : foes[who - 1];
+          if (!picked || table !== current) {
+            submit(auto.target, auto);
+            return;
+          }
+          target = picked.id;
+        }
+      }
+      const chosen: BrawlAction = { ...action, target };
+      submit(target, chosen);
+    } catch (error) {
+      log(`群架：手动这一手出错：${errorText(error)}`);
+      submit(auto.target, auto);
+    } finally {
+      current.asking = false;
+    }
   }
 
   function closeBrawlLive(): void {
@@ -281,6 +394,9 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       driver: null,
       abort: new AbortController(),
       showing: false,
+      mode: null,
+      panel: null,
+      asking: false,
     };
     current.net = createBrawlNet({
       self: 0,
@@ -343,6 +459,9 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       driver: null,
       abort: new AbortController(),
       showing: false,
+      mode: null,
+      panel: null,
+      asking: false,
     };
     current.net = createBrawlNet({
       // 房主按 players.length 发编号；先按名单长度猜，welcome 以房主发的为准
@@ -401,6 +520,12 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     const current = table;
     if (current) {
       const count = current.net.state().players.length;
+      if (current.net.state().phase === 'running' && !current.showing) {
+        actions.set(`${MENU_BRAWL_GROUP}/认输`, () => {
+          current.net.forfeit();
+          void refreshMenu();
+        });
+      }
       if (current.role === 'host') {
         actions.set(`${MENU_BRAWL_GROUP}/开打（${count} 人）`, startTable);
         actions.set(`${MENU_BRAWL_GROUP}/散场`, closeBrawlLive);

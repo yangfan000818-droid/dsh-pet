@@ -119,3 +119,35 @@ test('定手：序号接不上、出手人不对的一手不收', () => {
   assert.equal(live.push({ index: 0, actor: first.id, target, action }), true, '对得上的收下');
   assert.equal(live.done(), false, '还有下一手');
 });
+
+test('定手：手动这一手先不定（choose 回 null 停住），等广播回来才继续', () => {
+  const fighters = roster(3, 14);
+  const seed = 'live:4';
+  const submitted: BrawlAction[] = [];
+  let manual = true;
+  const controller = autoBrawlController(rngFrom('manual'));
+  const live = createBrawlLive({
+    fighters,
+    seed,
+    self: 0,
+    choose: (view) => (manual ? null : controller.decide(view)),
+    submit: (target, action) => submitted.push({ ...action, target }),
+  });
+  live.pump();
+  // 别人的手先按 unarmed 喂进去，一直喂到轮到 0 号
+  let next = 0;
+  let guard = 0;
+  while (live.pending() && live.pending()?.id !== 0 && guard++ < 20) {
+    const actor = live.pending()?.id ?? 0;
+    const target = (actor + 1) % fighters.length;
+    live.push({ index: next++, actor, target, action: { kind: 'unarmed' } });
+  }
+  assert.equal(live.pending()?.id, 0, '轮到本机了');
+  assert.equal(submitted.length, 0, '手动没点之前不交');
+  assert.equal(live.done(), false);
+  // 玩家点完，接线方把这一手交出去 → 网络广播回来
+  manual = false;
+  const target = 1;
+  live.push({ index: next, actor: 0, target, action: { kind: 'unarmed' } });
+  assert.equal(live.done(), false, '后面还有手');
+});

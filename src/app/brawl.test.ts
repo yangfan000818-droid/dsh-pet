@@ -174,7 +174,11 @@ test('分步群架：全自动与整场 brawl() 打出同一串事件', () => {
   for (const n of [2, 3, 4, 5]) {
     const fighters = roster(n, 21 + n);
     const whole = brawl(fighters, 'step-seed');
-    const step = brawlUntilDecision(fighters, 'step-seed', fighters.map(() => 'auto' as const));
+    const step = brawlUntilDecision(
+      fighters,
+      'step-seed',
+      fighters.map(() => 'auto' as const),
+    );
     assert.deepEqual(step.events, whole, `${n} 人`);
     assert.equal(step.need, null, '全自动一路打到底');
   }
@@ -208,4 +212,32 @@ test('分步群架：按收到的一手一手喂进去，事件与整场一致',
   assert.equal(need, null, '能够打到收场');
   assert.deepEqual(events, whole, '分步重算与整场事件一致');
   assert.equal(cursor, expected.length, '每一手都喂到了');
+});
+
+test('群架：认输退场按清单执行——之后不出手也不挨打，不补 ko，同一份清单打出同一串事件', () => {
+  const fighters = roster(3, 21);
+  const seed = 'forfeit:1';
+  const options = { forfeits: [{ id: 1, at: 0 }] };
+  const events = brawl(fighters, seed, controllerFor(3, 21), options);
+  const at = events.findIndex((event) => event.kind === 'forfeit');
+  assert.ok(at > 0, '有退场事件');
+  const forfeit = events[at];
+  assert.equal(forfeit.actor, 1);
+  const after = events.slice(at + 1);
+  assert.equal(
+    after.some((event) => event.kind === 'decide' && event.actor === 1),
+    false,
+    '退场后不再出手',
+  );
+  assert.equal(
+    after.some((event) => 'target' in event && event.target === 1),
+    false,
+    '退场后不再是目标',
+  );
+  assert.equal(
+    events.some((event) => event.kind === 'ko' && event.target === 1),
+    false,
+    '退场不算被打倒',
+  );
+  assert.deepEqual(brawl(fighters, seed, controllerFor(3, 21), options), events, '同一份清单演同一场');
 });

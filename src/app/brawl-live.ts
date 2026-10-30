@@ -34,8 +34,11 @@ export interface BrawlLiveOptions {
   seed: string;
   /** 本机编号 */
   self: number;
-  /** 轮到本机时选一手（现在全是自动；B2 手动出招也走这里） */
-  choose: (view: BrawlView) => BrawlAction;
+  /**
+   * 轮到本机时选一手。返回 `null` 表示这一手还没定（手动面板开着等玩家点）：
+   * 定手停在这里，等接线方把这一手交出去、网络广播回来再继续。
+   */
+  choose: (view: BrawlView) => BrawlAction | null;
   /** 把本机这一手交给网络；不是自己的轮次不会被调 */
   submit: (target: number, action: Action) => void;
   brawl?: BrawlOptions;
@@ -62,6 +65,8 @@ export function createBrawlLive(options: BrawlLiveOptions): BrawlLive {
   /** 按编号攒下已定的一手手（引擎按每人自己的顺序取） */
   const delivered: BrawlAction[][] = fighters.map(() => []);
   const gone = new Set<number>();
+  /** 退场清单：喂给引擎的那份（`at` = 这人已经出过几手，各家算出来一样） */
+  const forfeits: Array<{ id: number; at: number }> = [];
   let events: BrawlEvent[] = [];
   let need: BrawlDecisionNeed | null = null;
   let done = false;
@@ -74,8 +79,10 @@ export function createBrawlLive(options: BrawlLiveOptions): BrawlLive {
     const result = brawlUntilDecision(
       fighters,
       seed,
-      fighters.map((_, id) => (gone.has(id) ? ('auto' as const) : delivered[id])),
-      options.brawl,
+      delivered,
+      forfeits.length === 0
+        ? options.brawl
+        : { ...options.brawl, forfeits: [...(options.brawl?.forfeits ?? []), ...forfeits] },
     );
     events = result.events;
     need = result.need;
@@ -91,8 +98,10 @@ export function createBrawlLive(options: BrawlLiveOptions): BrawlLive {
       return;
     }
     if (submitted) return;
-    submitted = true;
     const action = options.choose(need.view);
+    // 手动：玩家还没点，这一手先不定；接线方交出去以后会经网络广播回来
+    if (!action) return;
+    submitted = true;
     options.submit(action.target, action);
   };
 
@@ -116,6 +125,8 @@ export function createBrawlLive(options: BrawlLiveOptions): BrawlLive {
       if (id < 0 || id >= delivered.length || gone.has(id)) return;
       gone.add(id);
       if (id === self) submitted = false;
+      // 退场落在「这人下一手」：他已经出过几手就是引擎那边的第几手
+      forfeits.push({ id, at: delivered[id].length });
       pump();
     },
     retry() {
