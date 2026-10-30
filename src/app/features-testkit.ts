@@ -67,6 +67,8 @@ export interface FakeWin {
   calls: string[];
   destroyed: boolean;
   hidden: boolean;
+  /** 被 `showInactive()` 亮出来的次数（擂台选方式前不亮、开打才亮，靠它断言） */
+  inactiveShown: number;
 }
 
 /** 建窗与页面调用记录（心魔试炼那场用；其他测试不开窗口，看到的一直是空） */
@@ -79,6 +81,7 @@ export function fakeWindow(url: string): FakeWin {
     calls: [],
     destroyed: false,
     hidden: false,
+    inactiveShown: 0,
     url,
     isDestroyed: () => win.destroyed,
     getBounds: () => ({ x: 0, y: 0, width: 200, height: 200 }),
@@ -90,7 +93,10 @@ export function fakeWindow(url: string): FakeWin {
       win.url = target;
       return Promise.resolve();
     },
-    showInactive: () => undefined,
+    showInactive: () => {
+      win.hidden = false;
+      win.inactiveShown += 1;
+    },
     show: () => {
       win.hidden = false;
     },

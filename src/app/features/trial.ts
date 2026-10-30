@@ -1,4 +1,5 @@
 import { openActionPanel } from '../action-panel-window';
+import type { ActionPanelWindow } from '../action-panel-window';
 import { arenaScoreboard, openArenaWindow } from '../arena-window';
 import { askAiTurn, legalChoices, startLiveBattle } from '../battle-live';
 import { createDashRig, screenUnion } from '../battle-dash';
@@ -10,6 +11,8 @@ import { Cultivation } from '../cultivation';
 import { openGuestWindow } from '../visit-windows';
 import { cleanText, LINE_MAX } from '../visit';
 import { MENU_CULTIVATION_GROUP, CLOSE_HOLD_MS, lazyFns } from './context';
+import { chooseManualAction } from './manual-action';
+import { errorText } from './util';
 import type { FeatureContext, TrialWindows } from './context';
 
 /** 心魔试炼、渡劫 */
@@ -17,6 +20,7 @@ export interface Trial {
   runTrial(): Promise<void>;
   closeTrial(afterMs: number): void;
   skipTrial(): void;
+  forfeitBattle(): Promise<void>;
   runTribulation(wantPill: boolean): Promise<void>;
   closeTribulationFx(afterMs: number): void;
   tribulationActions(practice: Cultivation, actions: Map<string, () => unknown>): void;
@@ -74,7 +78,9 @@ export function createTrial(ctx: FeatureContext): Trial {
       // 对战等大、贴身：攻击特效的飞行距离才对得上素材里的命中时刻（串门维持小一号的表意）
       { tint: 'shadow', scale: 1, tight: true },
     );
-    const arena = openArenaWindow(electron, `${origin}/app/arena`, homePet.box, () => windows?.guest.bounds() ?? null);
+    const arena = openArenaWindow(electron, `${origin}/app/arena`, homePet.box, () => windows?.guest.bounds() ?? null, {
+      initiallyVisible: false,
+    });
     // 心魔要播的动画先取到窗口里（X7：换源不等网络，出手才和飞行物对得上）
     guest.preload(SHOW_ANIMS);
     // 特效层（X7）：飞行物从出手方手里飞到对方身上，命中那一刻对方才开始反应
@@ -143,7 +149,11 @@ export function createTrial(ctx: FeatureContext): Trial {
       closeTrialWindows(windows, 0);
       return;
     }
+    // 选完出招方式才亮血条；准备阶段只保留宠物与出招面板
+    arena.setVisible(true);
     let events: BattleEvent[];
+    /** 自动局在整场时间线上认输：演出立刻停，结果按负场记（X26） */
+    let forfeited = false;
     if (mode === 'auto') {
       // 全自动：和以前完全一样——整场算好、整场时间线
       panel.close();
@@ -151,11 +161,16 @@ export function createTrial(ctx: FeatureContext): Trial {
       events = fight(you, foe, seed);
       const steps = timeline(events, [you.name, foe.name], Math.random, [you.skills, foe.skills]);
       ctx.state.battle = new BattleShow(steps, showSides);
-      void refreshMenu();
       const show = ctx.state.battle;
+      ctx.state.forfeitNow = () => {
+        forfeited = true;
+        show.dispose();
+      };
+      void refreshMenu();
       // 先占住宠物再开演：两段动画之间别插播随机活动（等锁的这一下可能被退出打断，所以留住这一场）
       await holdPet(steps);
       await show.run();
+      ctx.state.forfeitNow = null;
       ctx.state.battle = null;
     } else {
       // 逐手：AI 出招 / 手动出招（X17）
@@ -179,22 +194,13 @@ export function createTrial(ctx: FeatureContext): Trial {
           signal: AbortSignal,
         ): Promise<{ action: Action; line?: string } | null> => {
           if (mode === 'manual') {
-            const choices = legalChoices(view);
-            const pick = await panel.chooseAction(
-              choices.map((choice) => ({
-                label: choice.label,
-                ...(choice.note ? { note: choice.note } : {}),
-                effect: choice.effect,
-                tone: choice.tone,
-              })),
-              deps.actionTimeoutMs ?? 20_000,
-            );
-            if (pick === null) {
-              ctx.log('逐手出招：手动没点，按后备挑法');
-              return null;
-            }
-            const choice = choices[pick];
-            return choice ? { action: choice.action } : null;
+            return chooseManualAction({
+              panel,
+              choices: legalChoices(view),
+              timeoutMs: deps.actionTimeoutMs ?? 20_000,
+              onTimeout: () => ctx.log('逐手出招：手动没点，按后备挑法'),
+              forfeit: () => ctx.state.forfeitNow?.(),
+            });
           }
           const reply = await askAiTurn({
             ai: ctx.ai,
@@ -214,9 +220,12 @@ export function createTrial(ctx: FeatureContext): Trial {
         log: ctx.log,
       });
       ctx.state.liveBattle = live;
+      const forfeitHook = (): void => live.forfeit();
+      ctx.state.forfeitNow = forfeitHook;
       void refreshMenu();
       const finished = await live.done;
       if (ctx.state.liveBattle === live) ctx.state.liveBattle = null;
+      if (ctx.state.forfeitNow === forfeitHook) ctx.state.forfeitNow = null;
       if (!finished || ctx.state.disposed) {
         releasePet(ctx.state.disposed ? 0 : CLOSE_HOLD_MS);
         return;
@@ -227,11 +236,15 @@ export function createTrial(ctx: FeatureContext): Trial {
     // 中途退出了（dispose）：别再把这场算进存档
     if (ctx.state.disposed) return;
     const end = events[events.length - 1];
-    const won = end.kind === 'end' && end.winner === 0;
+    const won = !forfeited && end.kind === 'end' && end.winner === 0;
     const suffix = mode === 'ai' ? '（AI 出招）' : mode === 'manual' ? '（手动）' : '';
     // 奖励（修为进账、掉法宝、战绩都在 trialDone 里；冒泡与日记在 onCultivation）
     onCultivation(Date.now(), practice.trialDone(Date.now(), won), { anim: false });
-    diary.note(Date.now(), 'cultivate', `${won ? '心魔试炼打赢了' : '心魔试炼没打赢'}${suffix}`);
+    diary.note(
+      Date.now(),
+      'cultivate',
+      `${won ? '心魔试炼打赢了' : '心魔试炼没打赢'}${suffix}${forfeited ? '，认输了' : ''}`,
+    );
     // 演完马上收摊（§X14）：菜单换回来、这一场的窗口按 CLOSE_HOLD_MS 收，都不等赛后感言
     void refreshMenu();
     closeTrialWindows(windows, CLOSE_HOLD_MS);
@@ -277,6 +290,46 @@ export function createTrial(ctx: FeatureContext): Trial {
       return;
     }
     ctx.state.battle?.skip();
+  }
+
+  /**
+   * 菜单「认输」（X26）：二次确认，默认继续打；确认后由这一场注册的 `forfeitNow` 停演、按负场收。
+   * 自动局手上没有出招面板，这时另开一块只放这两个按钮——不能借正在等的那块面板，
+   * 面板一次只挂一问，借了就会把手上这一手按「没选」结算掉。
+   */
+  async function forfeitBattle(): Promise<void> {
+    const forfeit = ctx.state.forfeitNow;
+    if (!forfeit) return;
+    let panel: ActionPanelWindow;
+    let own = false;
+    try {
+      panel = openActionPanel(
+        electron,
+        `${new URL(deps.petBase).origin}/app/panel`,
+        () => null,
+        () => homePet.box(),
+      );
+    } catch (error) {
+      ctx.log(`认输：确认面板没开出来：${errorText(error)}`);
+      return;
+    }
+    // 自动 / AI 局手上没有面板：这块就是眼下的面板，本机接口和 curl 也能点它
+    if (!ctx.state.actionPanel) {
+      ctx.state.actionPanel = panel;
+      own = true;
+    }
+    try {
+      const pick = await panel.choosePrompt(
+        '确定认输？这一场按输记',
+        ['继续打', '认输'],
+        deps.actionTimeoutMs ?? 20_000,
+      );
+      // 确认期间这一场可能已经演完（菜单还挂着旧引用）：那就不再动手
+      if (pick === 2 && ctx.state.forfeitNow === forfeit) forfeit();
+    } finally {
+      if (own && ctx.state.actionPanel === panel) ctx.state.actionPanel = null;
+      panel.close();
+    }
   }
 
   // ---------- 渡劫（X4） ----------
@@ -389,5 +442,13 @@ export function createTrial(ctx: FeatureContext): Trial {
     actions.set(`${MENU_CULTIVATION_GROUP}/渡劫`, () => void runTribulation(false));
     if (plan.canPill) actions.set(`${MENU_CULTIVATION_GROUP}/服丹后渡劫`, () => void runTribulation(true));
   }
-  return { runTrial, closeTrial, skipTrial, runTribulation, closeTribulationFx, tribulationActions };
+  return {
+    runTrial,
+    closeTrial,
+    skipTrial,
+    forfeitBattle,
+    runTribulation,
+    closeTribulationFx,
+    tribulationActions,
+  };
 }

@@ -616,11 +616,12 @@ export type DuelReply = { ok: true; card: SparCard; nonce: string; token: string
 export type DuelRevealReply = { ok: true } | { ok: false; reason: 'mismatch' | 'late' | 'not-visiting' | 'old-host' };
 
 /**
- * 逐手局一手（X19）的应答：轮到对面出手时带回它的 action；`illegal` = 收到的出手过不了
- * `legalActions`（按掉线处理），`late` = 序号对不上 / 这一场已经收了，`not-visiting` = 没有这一场。
+ * 逐手局一手（X19）的应答：轮到对面出手时带回它的 action；`forfeit: true` 是认输通知（X26，
+ * 双方按同一场 forfeit 收场）；`illegal` = 收到的出手过不了 `legalActions`（按掉线处理），
+ * `late` = 序号对不上 / 这一场已经收了，`not-visiting` = 没有这一场。
  */
 export type SparTurnReply =
-  | { ok: true; action?: Action }
+  | { ok: true; action?: Action; forfeit?: true }
   | { ok: false; reason: 'illegal' | 'late' | 'busy' | 'bad-request' | 'not-visiting' | 'sent-home' };
 
 export interface HostHandlers {
@@ -641,8 +642,8 @@ export interface HostHandlers {
   spar(visitor: Visitor, card: SparCard, commit: string, live?: boolean): Promise<SparReply>;
   /** 客人亮随机数（X5 第 4 步，line 是它带来的赛后感言）：核对承诺后开打，对不上或超时按客人认输 */
   reveal(visitor: Visitor, nonce: string, line: string): Promise<SparRevealReply>;
-  /** 逐手局的一手（X19）：收到（或等）对方这一手；不合法 / 序号不对 / 没有这一场在这里回 */
-  sparTurn?(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  /** 逐手局的一手（X19）：收到（或等）对方这一手；`forfeit` 是对面认输（X26）；不合法 / 序号不对 / 没有这一场在这里回 */
+  sparTurn?(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   /**
    * 隔空切磋（X15）的挑战：等主人答复；off / busy / declined / timeout 在这里答，
    * 答应时回这边自己的名帖与随机数（令牌与应答签名在协议层出）
@@ -651,7 +652,7 @@ export interface HostHandlers {
   /** 挑战方亮对了随机数：名帖与随机数都齐了，开演（features.ts 记账 + 演出） */
   duelReveal(visitor: Visitor, nonce: string, line: string): void;
   /** 逐手局的一手（X19，隔空切磋） */
-  duelTurn?(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  duelTurn?(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   /** 挑战方没亮随机数（对不上 / 超时，协议层已判）：按它认输记一场 */
   duelConceded(visitor: Visitor, reason: 'mismatch' | 'late'): void;
   /** 客人走了：leave = 告辞（text 是告别的话，可空）；lost = 太久没动静 */
@@ -878,9 +879,9 @@ export class VisitHost {
         return send(res, 200, await this.handlers.spar(session.visitor, card, commit, live));
       }
       case '/v1/spar/turn': {
-        const reply = await this.turnBody(body, (index, action) =>
+        const reply = await this.turnBody(body, (index, action, forfeit) =>
           this.handlers.sparTurn
-            ? this.handlers.sparTurn(session.visitor, index, action)
+            ? this.handlers.sparTurn(session.visitor, index, action, forfeit)
             : Promise.resolve({ ok: false, reason: 'not-visiting' as const }),
         );
         return send(res, 200, reply);
@@ -1135,21 +1136,24 @@ export class VisitHost {
     if (!session || session.token !== token || session.visitor.address !== address) {
       return send(res, 200, { ok: false, reason: 'not-visiting' });
     }
-    const reply = await this.turnBody(body, (index, action) =>
+    const reply = await this.turnBody(body, (index, action, forfeit) =>
       this.handlers.duelTurn
-        ? this.handlers.duelTurn(session.visitor, index, action)
+        ? this.handlers.duelTurn(session.visitor, index, action, forfeit)
         : Promise.resolve({ ok: false, reason: 'not-visiting' as const }),
     );
     return send(res, 200, reply);
   }
 
-  /** 逐手局请求体的结构校验（序号、出手形状）：过了才交给 features 判 `legalActions` */
+  /** 逐手局请求体的结构校验（序号、出手形状、认输标记）：过了才交给 features 判 `legalActions` */
   private async turnBody(
     body: Record<string, unknown>,
-    ask: (index: number, action: Action | undefined) => Promise<SparTurnReply>,
+    ask: (index: number, action: Action | undefined, forfeit: boolean) => Promise<SparTurnReply>,
   ): Promise<SparTurnReply> {
     const index = parseTurnIndex(body.index);
     if (index === null) return { ok: false, reason: 'bad-request' };
+    if (body.forfeit !== undefined && body.forfeit !== true && body.forfeit !== false)
+      return { ok: false, reason: 'bad-request' };
+    const forfeit = body.forfeit === true;
     let action: Action | undefined;
     if (body.action !== undefined && body.action !== null) {
       const parsed = parseSparAction(body.action);
@@ -1157,7 +1161,9 @@ export class VisitHost {
       if (!parsed) return { ok: false, reason: 'bad-request' };
       action = parsed;
     }
-    return ask(index, action);
+    // 认输不带出手；两样一起发说明对端实现有问题，不猜它的意思
+    if (forfeit && action) return { ok: false, reason: 'bad-request' };
+    return ask(index, action, forfeit);
   }
 
   /** 超时没亮随机数：主人家按挑战方认输记一场，槽位腾出来；迟到的 reveal 还能认出来回 late */
@@ -1411,11 +1417,12 @@ export async function sendSpar(
 
 /**
  * 逐手局的一手（X19，串门切磋）：轮到自家出手时带 action，轮到对面时不带、挂着等它回 action。
+ * 认输（X26）带 `forfeit: true`，成功应答会带 `forfeit: true` 通知。
  * 等的一方 35 秒还没收到就当掉线（`TURN_WAIT_MS`），连不上 / 超时都抛错，由调用方按掉线收。
  */
 export async function sendSparTurn(
   host: HostAddress,
-  body: { token: string; index: number; action?: Action },
+  body: { token: string; index: number; action?: Action; forfeit?: boolean },
   signal?: AbortSignal,
 ): Promise<SparTurnReply> {
   return sendTurn(host, '/v1/spar/turn', body, signal);
@@ -1424,11 +1431,12 @@ export async function sendSparTurn(
 async function sendTurn(
   host: HostAddress,
   path: '/v1/spar/turn' | '/v1/duel/turn',
-  body: { token: string; index: number; action?: Action },
+  body: { token: string; index: number; action?: Action; forfeit?: boolean },
   signal?: AbortSignal,
 ): Promise<SparTurnReply> {
   const result = await post(host, path, body, TURN_WAIT_MS, signal);
   if (result.ok === true) {
+    if (result.forfeit === true) return { ok: true, forfeit: true };
     if (result.action === undefined || result.action === null) return { ok: true };
     const action = parseSparAction(result.action);
     return action ? { ok: true, action } : { ok: false, reason: 'illegal' };
@@ -1548,7 +1556,7 @@ export async function sendDuel(
 /** 逐手局的一手（X19，隔空切磋）：同 `sendSparTurn`，只是走 /v1/duel/turn 的令牌 */
 export async function sendDuelTurn(
   host: HostAddress,
-  body: { token: string; index: number; action?: Action },
+  body: { token: string; index: number; action?: Action; forfeit?: boolean },
   signal?: AbortSignal,
 ): Promise<SparTurnReply> {
   return sendTurn(host, '/v1/duel/turn', body, signal);

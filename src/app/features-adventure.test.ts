@@ -164,6 +164,9 @@ test('X18 历练逐手：GET /app/battle 看到在选方式 / 等一手，POST �
       assert.ok((action?.options.length ?? 0) > 0, '这一手有得选');
       assert.ok(features.battle.choose(1), 'curl 点第一手');
       await until(() => (last(menus) ?? []).includes('修炼/快进'), '逐手局开打（菜单换成快进）');
+      // X26：认输项插在「快进」旁，不能把心魔试炼的 guard 一起放开；历练也不支持认输
+      assert.ok(!(last(menus) ?? []).includes('修炼/心魔试炼'), '打历练时不冒心魔试炼');
+      assert.ok(!(last(menus) ?? []).includes('修炼/认输'), '历练不支持认输');
       clicks.push('修炼/快进');
       // 快进以后可能打赢（结局页），也可能输了（只剩倒带 / 收场）：输了就点「就此收场」
       await until(() => {

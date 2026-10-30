@@ -9,8 +9,19 @@
  * 境界映射：炼气 0–8；筑基 9–11、金丹 12–14、元婴 15–17、化神 18–20、炼虚 21–23、合体 24–26、大乘 27–29。
  * 渡劫雷数（§X4）：进筑基、金丹 3 道，进元婴、化神 6 道，之后 9 道。
  */
-import { fairSparPair, fight, shadowOf, tribulate, WEAPONS, SKILLS } from '../../src/app/battle.ts';
-import { fighterAt } from '../../src/app/battle-testkit.ts';
+import {
+  autoController,
+  fairSparPair,
+  fight,
+  rngFrom,
+  shadowOf,
+  tribulate,
+  WEAPONS,
+  SKILLS,
+  SPAR_DAMAGE_SCALE,
+  SPAR_MAX_HIT_SHARE,
+} from '../../src/app/battle.ts';
+import { fighterAt, seededRng } from '../../src/app/battle-testkit.ts';
 
 const pairs = Number(process.argv.includes('--pairs') ? process.argv[process.argv.indexOf('--pairs') + 1] : 2000);
 const rng = Math.random;
@@ -110,6 +121,76 @@ if (dungeonFlag >= 0 && process.argv[dungeonFlag + 1] === 'sanwang') {
   console.log(
     `估算一趟 ${(ms / runs / 60_000).toFixed(1)} 分钟（每步赶路 ${TRAVEL_MS / 1000} 秒 + 速战 10 秒 + 守护 1 分钟）`,
   );
+  process.exit(0);
+}
+
+// X26：真实切磋单独跑，避免拿全伤害托管局判断手动体验。每场双方属性 / 件数拉平，
+// 甲分别用托管和「主动伤害技优先」策略，乙始终托管；同一项两种策略共用角色与战斗种子。
+if (process.argv.includes('--spar')) {
+  const stage = Number(process.argv.includes('--stage') ? process.argv[process.argv.indexOf('--stage') + 1] : 10);
+  const options = { damageScale: SPAR_DAMAGE_SCALE, maxHitShare: SPAR_MAX_HIT_SHARE };
+  const damageFirst = [
+    'abyss-field',
+    'ancients',
+    'ghost-knock',
+    'tide-cannon',
+    'blue-whale',
+    'ghost-blood',
+    'ghost-hand',
+    'dragon-palm',
+    'myriad-palm',
+    'lion-roar',
+    'whale-song',
+    'dream-chant',
+    'farewell-wind',
+    'whale-gulp',
+    'finger-sword',
+    'headless-shadow',
+    'ghost-painting',
+    'eat-hardship',
+  ];
+  const putSkill = (f, id) => {
+    if (!id || f.skills.includes(id)) return f;
+    if (f.skills.length === 0) f.skills = [id];
+    else f.skills[f.skills.length - 1] = id;
+    return f;
+  };
+  const sparRate = (id, manual) => {
+    let wins = 0;
+    for (let i = 0; i < pairs; i++) {
+      const [a, b] = fairSparPair(putSkill(fighterAt(stage, seededRng(i)), id), fighterAt(stage, seededRng(i + 500)));
+      a.name = '甲';
+      b.name = '乙';
+      const seed = seedOf(i);
+      let controllers;
+      if (manual) {
+        const decideRng = rngFrom(seed + ':decide');
+        const fallback = autoController(decideRng);
+        controllers = [
+          {
+            decide(view) {
+              const unused = view.you.skills.filter((skill) => !view.you.used.includes(skill));
+              const skill =
+                view.you.sealed === 'skill' || view.you.skillUsesLeft === 0
+                  ? undefined
+                  : damageFirst.find((candidate) => unused.includes(candidate));
+              return skill ? { kind: 'skill', skill } : fallback.decide(view);
+            },
+          },
+          autoController(decideRng),
+        ];
+      }
+      if (fight(a, b, seed, controllers, options).at(-1).winner === 0) wins++;
+    }
+    return wins / pairs;
+  };
+  console.log(`真实切磋 stage=${stage}，每项 ${pairs} 场；甲手动主动技优先，乙托管\n`);
+  console.log(`随机配招：托管 ${sparRate(null, false).toFixed(3)}；主动技优先 ${sparRate(null, true).toFixed(3)}\n`);
+  for (const id of Object.keys(SKILLS)) {
+    console.log(
+      `招式 ${SKILLS[id].name}：托管 ${sparRate(id, false).toFixed(3)}；主动技优先 ${sparRate(id, true).toFixed(3)}`,
+    );
+  }
   process.exit(0);
 }
 

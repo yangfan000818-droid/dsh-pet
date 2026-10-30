@@ -256,8 +256,8 @@ export function createVisiting(ctx: FeatureContext): Visiting {
     reveal(visitor, nonce, line) {
       return hostReveal(visitor, nonce, line);
     },
-    sparTurn(visitor, index, action) {
-      return sparTurn(visitor, index, action);
+    sparTurn(visitor, index, action, forfeit) {
+      return sparTurn(visitor, index, action, forfeit);
     },
     // 隔空切磋（X15）：协议层已验过签名、模式、版本与名帖；关不关、忙不忙、主人答不答应在这边
     duel(visitor, card, commit, live) {
@@ -266,8 +266,8 @@ export function createVisiting(ctx: FeatureContext): Visiting {
     duelReveal(visitor, nonce, line) {
       hostDuelReveal(visitor, nonce, line);
     },
-    duelTurn(visitor, index, action) {
-      return duelTurn(visitor, index, action);
+    duelTurn(visitor, index, action, forfeit) {
+      return duelTurn(visitor, index, action, forfeit);
     },
     duelConceded(visitor, reason) {
       hostDuelConceded(visitor, reason);

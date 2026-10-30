@@ -10,6 +10,7 @@ import { diaryDate } from './diary.ts';
 import type { DiaryDay } from './diary.ts';
 import {
   cultivationEarly,
+  cultivationSave,
   env,
   fightCount,
   freeUdpPort,
@@ -280,4 +281,64 @@ test('X17 选方式的面板挂着时来隔空挑战回 busy，不挂应答菜�
 
 test('X17 逐手局等主人点招时来隔空挑战回 busy，不挂应答菜单', async () => {
   await duelDuringTrial('action');
+});
+
+test('X26 心魔：选方式前不亮血条，开打才亮；自动局从菜单认输按负场记账', async () => {
+  const clicks: string[] = [];
+  windows.length = 0;
+  await withFeatures(
+    { cultivation: cultivationEarly(), clicks, modeTimeoutMs: 2_000 },
+    async (features, _said, _bodies, home, extras) => {
+      const { menus } = extras;
+      await openTrial(features, clicks, menus);
+      const arena = windowOn('/app/arena')!;
+      assert.equal(arena.inactiveShown, 0, '选方式时血条还没亮');
+      assert.ok(features.battle.choose(1), '自动');
+      await until(() => arena.inactiveShown > 0, '开打才亮血条');
+      await until(() => (menus[menus.length - 1] ?? []).includes('修炼/认输'), '打的时候有认输项');
+      clicks.push('修炼/认输');
+      await until(() => /确定认输/.test(features.battle.state()?.title ?? ''), '认输二次确认');
+      assert.deepEqual(
+        features.battle.state()?.options.map((option) => option.label),
+        ['继续打', '认输'],
+        '默认继续打，认输是第二项',
+      );
+      assert.ok(features.battle.choose(2), '确认认输');
+      await until(() => fightCount(home) === 1, '认输也按一场记账');
+      const record = cultivationSave(home)!.record as { wins: number; losses: number };
+      assert.equal(record.losses, 1, '认输记负场');
+      assert.equal(record.wins, 0, '没按预先算好的胜负记赢');
+      assert.match(diaryText(home, 'cultivate'), /认输/, '日记写明认输');
+    },
+  );
+});
+
+test('X26 心魔手动：出招面板里的认输二次确认后按负场记账，这一手不再出', async () => {
+  const clicks: string[] = [];
+  windows.length = 0;
+  await withFeatures(
+    { cultivation: cultivationEarly(), clicks, modeTimeoutMs: 2_000, actionTimeoutMs: 2_000 },
+    async (features, _said, _bodies, home, extras) => {
+      const { menus } = extras;
+      await openTrial(features, clicks, menus);
+      assert.ok(features.battle.choose(3), '手动出招');
+      await until(() => features.battle.state()?.kind === 'action', '手动面板');
+      const state = features.battle.state()!;
+      const forfeitPick = state.options.find((option) => option.label === '认输')?.pick;
+      assert.ok(forfeitPick, '面板里有认输');
+      assert.ok(features.battle.choose(forfeitPick), '点认输');
+      await until(() => /确定认输/.test(features.battle.state()?.title ?? ''), '二次确认');
+      assert.ok(features.battle.choose(1), '先选继续打');
+      await until(() => features.battle.state()?.kind === 'action', '回到出招面板，这一手没被吞掉');
+      assert.equal(features.battle.state()?.title.includes('轮到你了'), true, '还是同一手');
+      const again = features.battle.state()!;
+      assert.ok(features.battle.choose(again.options.find((option) => option.label === '认输')!.pick), '再点认输');
+      await until(() => /确定认输/.test(features.battle.state()?.title ?? ''), '再确认');
+      assert.ok(features.battle.choose(2), '这次确认认输');
+      await until(() => fightCount(home) === 1, '认输记账');
+      const record = cultivationSave(home)!.record as { wins: number; losses: number };
+      assert.equal(record.losses, 1, '认输记负场');
+      assert.ok(!menus[menus.length - 1]?.includes('修炼/认输'), '收摊后认输项没了');
+    },
+  );
 });

@@ -1487,6 +1487,39 @@ test('X16 串门里送走（end.reason = farewell）：不演胜利 / 倒地，�
   );
 });
 
+test('X26 认输（end.reason = forfeit）：照常演胜利 / 倒地，收场台词点明认输', () => {
+  const events: BattleEvent[] = [
+    start(0),
+    decide(0, { kind: 'unarmed' }),
+    hit(0, 20, [100, 80]),
+    { actor: 1, kind: 'end', winner: 0, reason: 'forfeit', hp: [100, 80] },
+  ];
+  const steps = timeline(events, NAMES, seq());
+  assert.equal(animsOf(steps, '战斗-胜利').length, 1, '认输也是正常收场：赢家播胜利');
+  assert.equal(animsOf(steps, '战斗-倒地').length, 1, '认输方播倒地');
+  const closing = steps.filter((step) => step.closing && step.line);
+  assert.ok(
+    closing.some((step) => /认输/.test(step.line ?? '')),
+    '收场台词说认输，不是普通获胜',
+  );
+});
+
+test('X26 切磋主动技被闪避：出手动作与飞行物照播，对方播闪避，不补 0 伤害的 skill', () => {
+  const action: Action = { kind: 'skill', skill: 'lion-roar' };
+  const events: BattleEvent[] = [start(0), decide(0, action), { actor: 1, kind: 'dodge', hp: [100, 100] }];
+  const steps = timeline(events, NAMES, seq());
+  assert.equal(animsOf(steps, '战斗-吼').length, 1, '出手方照播招式动作');
+  assert.equal(animsOf(steps, '受击-震耳').length, 0, '被闪避就不播命中反应');
+  const dodges = animsOf(steps, '战斗-闪避');
+  assert.ok(dodges.length >= 1 && dodges.every((step) => step.who === 1), '对方播闪避');
+  assert.deepEqual(
+    steps.filter((step) => step.shot).map((step) => step.shot?.kind),
+    ['声波'],
+    '飞行物照放，只是掠过去',
+  );
+  assert.equal(steps.filter((step) => step.shot?.miss).length, 1, '这一发按打空演');
+});
+
 test('执行器 X16：dash 步到点交给冲刺的手；自然演完 / 快进都收一下冲刺（快进立刻复位）', async (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'] });
   const calls: Array<[0 | 1, string, number]> = [];

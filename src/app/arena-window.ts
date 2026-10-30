@@ -209,6 +209,13 @@ export interface ArenaWindow {
   close(afterMs: number): void;
   /** 钉住 / 放开（X16 冲刺）：钉住时按开场站位摆，不跟着两只的实时位置走 */
   pin(on: boolean): void;
+  /** 显示 / 收起两条血（选方式时不亮，正式开演才亮）；页面没加载完时先记下目标状态 */
+  setVisible(visible: boolean): void;
+}
+
+/** 开擂台窗口的选项：默认加载完就显示，心魔 / 切磋选方式时传 `initiallyVisible: false` */
+export interface ArenaWindowOptions {
+  initiallyVisible?: boolean;
 }
 
 /** 血条要让位：把宠物 / 对手窗口提到同一层的最前面，气泡文字压住血条也不挡字 */
@@ -229,12 +236,14 @@ function raisePetWindows(electron: WindowElectron, own: WindowLike): void {
  * @param pageUrl 本机服务的 /app/arena
  * @param home 取自家宠物现在的位置（watchHomePet 的 box）
  * @param foe 取对手窗口现在的位置（没开或不知道就只按自家宠物排）
+ * @param options 初始可见性；缺省加载完就显示（历练等旧调用方行为不变）
  */
 export function openArenaWindow(
   electron: WindowElectron,
   pageUrl: string,
   home: () => PetBox | null,
   foe: () => Rect | null,
+  options: ArenaWindowOptions = {},
 ): ArenaWindow {
   const workAreaOf = (box: PetBox | null): Rect => {
     const point = box
@@ -275,6 +284,8 @@ export function openArenaWindow(
   win.setIgnoreMouseEvents(true);
   let ready = false;
   let pinned = false;
+  /** 目标可见性：load 前调 setVisible 只改这里，加载完再按它决定要不要 showInactive */
+  let visible = options.initiallyVisible !== false;
   const queued: string[] = [];
   const run = (code: string): void => {
     if (win.isDestroyed()) return;
@@ -287,8 +298,9 @@ export function openArenaWindow(
     .loadURL(pageUrl)
     .then(() => {
       if (win.isDestroyed()) return;
-      // 透明窗口没有可闪的底色，加载完再显示即可（不抢焦点）
-      win.showInactive();
+      // 透明窗口没有可闪的底色，加载完再显示即可（不抢焦点）；
+      // initiallyVisible: false 或加载前 setVisible(false) 过的，这里就不亮，等正式开演再 setVisible(true)
+      if (visible) win.showInactive();
       ready = true;
       for (const code of queued.splice(0)) run(code);
       // 血条垫在宠物 / 对手窗口下面：气泡文字可以压住它
@@ -323,6 +335,13 @@ export function openArenaWindow(
     bounds: () => anchor,
     pin(on) {
       pinned = on;
+    },
+    setVisible(next) {
+      visible = next;
+      // 还没加载完：只记目标状态，加载完由 load 的回调按它显示（不能先亮一下再收）
+      if (!ready || win.isDestroyed()) return;
+      if (next) win.showInactive();
+      else win.hide?.();
     },
     close(afterMs) {
       setTimeout(() => {

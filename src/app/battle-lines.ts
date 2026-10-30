@@ -145,6 +145,9 @@ const END_LINES = ['{a}赢了！', '{a}站到了最后！', '{b}躺平了，{a}�
 /** 送友风把对方送回家（X16）：串门切磋里的 `end.reason = 'farewell'` */
 const FAREWELL_END_LINES = ['{b}被一阵风送回家了', '{b}被{a}的送友风送走，回家去了'];
 
+/** 认输（X26）：`end.reason = 'forfeit'`，`{b}` 是认输的那一方 */
+const FORFEIT_END_LINES = ['{b}认输了，{a}获胜', '{b}收手认输，这一场归{a}'];
+
 /** 替挡（Y0，定仙游结局）：`{g}` 是替挡者的名字，`{a}` 是被护住的那一方 */
 const GUARD_LINES = ['{g}挡在{a}前面，硬接了这一下', '{g}一把拦在{a}身前，这一下没打着'];
 
@@ -259,6 +262,12 @@ export function lineOf(
     case 'field':
       return fill(pick(FIELD_LINES), a, b, event.damage);
     case 'end':
-      return fill(pick(event.reason === 'farewell' ? FAREWELL_END_LINES : END_LINES), a, b);
+      return fill(
+        pick(
+          event.reason === 'farewell' ? FAREWELL_END_LINES : event.reason === 'forfeit' ? FORFEIT_END_LINES : END_LINES,
+        ),
+        a,
+        b,
+      );
   }
 }

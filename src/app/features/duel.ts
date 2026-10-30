@@ -42,7 +42,7 @@ export interface Duel {
   hostDuel(visitor: Visitor, card: SparCard, commit: string, live?: boolean): Promise<DuelAnswer>;
   answerDuel(accept: boolean, pickedMode?: TurnMode): Promise<void>;
   hostDuelReveal(visitor: Visitor, nonce: string, line: string): void;
-  duelTurn(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  duelTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   hostDuelConceded(visitor: Visitor, why: 'mismatch' | 'late'): void;
   duelChallengeActions(): Map<string, () => unknown>;
 }
@@ -491,10 +491,15 @@ export function createDuel(ctx: FeatureContext): Duel {
   }
 
   /** 逐手局应战方这一侧收到的一手（X19）：协议层已核过令牌 / 来源地址，递进正在跑的那一场 */
-  async function duelTurn(_visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply> {
+  async function duelTurn(
+    _visitor: Visitor,
+    index: number,
+    action?: Action,
+    forfeit?: boolean,
+  ): Promise<SparTurnReply> {
     const turn = ctx.state.liveTurn;
     if (!turn) return { ok: false, reason: 'not-visiting' };
-    return turn(index, action);
+    return turn(index, action, forfeit);
   }
 
   /** 挑战方的赛后感言：按人设编一句（只带人设，§2.2 的口径），编太久退回模板（模型卡住别拖着收场） */

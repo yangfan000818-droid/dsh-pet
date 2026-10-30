@@ -250,7 +250,7 @@ export const MOVE_IDS = Object.keys(MOVES) as MoveId[];
  * 引擎版本（X5 名帖的 v）：结算规则、图鉴内容变了就 +1。切磋双方在名帖里各带一份，
  * 两边不同就切不了（谁也不知道对方那版引擎会打出什么）。
  */
-export const BATTLE_VERSION = 8;
+export const BATTLE_VERSION = 9;
 
 /**
  * 切磋节奏（X23）：切磋 / 隔空只结算 65% 伤害，把「两三手互秒」拉成有来有回的长局。
@@ -263,6 +263,13 @@ export const SPAR_DAMAGE_SCALE = 0.65;
  * 只封切磋和隔空，历练、心魔、渡劫不传。
  */
 export const SPAR_MAX_HIT_SHARE = 0.3;
+
+/**
+ * 切磋每方每场能主动选择的主动技次数（X26）：串门 / 隔空切磋启用，心魔、历练、渡劫不受影响。
+ * 每次真正执行 `action.kind === 'skill'` 扣 1（包括增益、控制、回血、聚气，被闪避也扣）；
+ * 鲸派气功蓄力后的自动释放不重复扣，凭空生花追加的那一手照常扣。
+ */
+export const SPAR_ACTIVE_LIMIT = 3;
 
 /** 主动招式（Action 里允许出现的） */
 const ACTIVE_SKILLS: readonly SkillId[] = [
@@ -292,6 +299,35 @@ const ACTIVE_SKILLS: readonly SkillId[] = [
   'abyss-field',
   'shadow-step',
 ];
+
+/**
+ * 切磋里要继续判命中（`dodgeRate`）的主动技（X26 §3.2）：伤害 / 控制、指定对方的效果。
+ * 自增益（凭空生花、万我、逆流护身印、深渊领域、瞬影、聚气起手）与延迟触发的招牌招不在这一档。
+ */
+const SPAR_DODGE_SKILLS: readonly SkillId[] = [
+  'lion-roar',
+  'blue-whale',
+  'whale-song',
+  'ink',
+  'whale-gulp',
+  'dream-chant',
+  'finger-sword',
+  'dragon-palm',
+  'farewell-wind',
+  'myriad-palm',
+  'eat-hardship',
+  'ghost-hand',
+  'headless-shadow',
+  'ghost-painting',
+  'ghost-blood',
+];
+
+/**
+ * 切磋里仍保留必中的招牌招（X26 §3.1）：普通主动技恢复闪避判定后，这几门直接伤害照旧必中。
+ * 延迟触发的招牌伤害（鲸派气功释放、古人补击、鬼敲门那一击）走各自路径，本来就不判闪避。
+ * 它们仍然固定抽一次命中随机数（见 `takeAction`），换招不会无意义地挪动后续结算序列。
+ */
+const SPAR_SURE_SKILLS: readonly SkillId[] = ['blue-whale', 'finger-sword', 'headless-shadow'];
 
 export interface Fighter {
   name: string; // 显示用
@@ -335,6 +371,8 @@ export interface BattleView {
     moves?: MoveId[];
     /** 这场用掉的带次数限制的招，每次使用追加一个编号（Y0） */
     moveUses?: MoveId[];
+    /** 切磋（X26）：本场还剩几次主动技额度；只在切磋局填，其他模式不出现 */
+    skillUsesLeft?: number;
   };
   /** `bubbles` / `mirror`（X21）：对方还剩几层泡泡护体、几重魂影，吃苦吃亏拿这个挑吃法 */
   foe: { weapons: WeaponId[]; skills: SkillId[]; moves?: MoveId[]; bubbles?: number; mirror?: number };
@@ -462,7 +500,13 @@ export type BattleEvent =
       hp: [number, number];
     }
   | { actor: 0 | 1; kind: 'strike'; index: number; damage: number; blocked: boolean; hp: [number, number] }
-  | { actor: 0 | 1; kind: 'end'; winner: 0 | 1; reason: 'ko' | 'timeout' | 'farewell'; hp: [number, number] };
+  | {
+      actor: 0 | 1;
+      kind: 'end';
+      winner: 0 | 1;
+      reason: 'ko' | 'timeout' | 'farewell' | 'forfeit';
+      hp: [number, number];
+    };
 
 /** 一个小 PRNG（sfc32），种子取 sha256 摘要的前 16 字节，不引依赖 */
 function sfc32(seed: Buffer): () => number {
@@ -614,6 +658,8 @@ interface Side {
   field: number;
   /** 瞬影（X25）：挨普通攻击全闪，自己下一次攻击必中 */
   blink: boolean;
+  /** 切磋（X26）：本场还剩几次主动技额度；非切磋局不扣也不用 */
+  skillUses: number;
 }
 
 function makeSide(f: Fighter, initialDelay: number): Side {
@@ -640,6 +686,7 @@ function makeSide(f: Fighter, initialDelay: number): Side {
     charge: 0,
     field: 0,
     blink: false,
+    skillUses: SPAR_ACTIVE_LIMIT,
   };
   // 泡泡 / 灵兽的初始次数也走 hasSkill（X22）：以后开局就被封的情况不用另写一份判定
   side.bubbles = hasSkill(side, 'bubble') ? 2 : 0;
@@ -764,7 +811,11 @@ export function autoController(rng: () => number): Controller {
       const foeSide = view.self === 0 ? 1 : 0;
       const foeHp = view.hp[foeSide];
       const foeMax = view.maxHp[foeSide];
-      const unused = view.you.skills.filter((s) => ACTIVE_SKILLS.includes(s) && !view.you.used.includes(s));
+      // 切磋（X26）额度用完：主动技一律不进 AI 清单，和手动面板、引擎合法动作同一上限
+      const skillBudget = view.you.skillUsesLeft === undefined || view.you.skillUsesLeft > 0;
+      const unused = skillBudget
+        ? view.you.skills.filter((s) => ACTIVE_SKILLS.includes(s) && !view.you.used.includes(s))
+        : [];
       if (unused.includes('bloom') && hp * 2 < maxHp) return { kind: 'skill', skill: 'bloom' };
       // 吃苦吃亏（X21）：对方身上还有泡泡 / 魂影时先吃掉
       if (unused.includes('eat-hardship') && (view.foe.bubbles ?? 0) + (view.foe.mirror ?? 0) > 0)
@@ -840,7 +891,9 @@ export function legalActions(view: BattleView): Action[] {
   const actions: Action[] =
     view.you.sealed === 'weapon' ? [] : view.you.weapons.map((weapon): Action => ({ kind: 'weapon', weapon }));
   actions.push({ kind: 'unarmed' });
-  if (view.you.sealed !== 'skill') {
+  // 切磋（X26）：主动技额度用完就不再列出来；其他模式没有 skillUsesLeft，照旧
+  const skillBudget = view.you.skillUsesLeft === undefined || view.you.skillUsesLeft > 0;
+  if (view.you.sealed !== 'skill' && skillBudget) {
     for (const skill of view.you.skills) {
       if (ACTIVE_SKILLS.includes(skill) && !view.you.used.includes(skill)) actions.push({ kind: 'skill', skill });
     }
@@ -1122,6 +1175,8 @@ function runFight(
               moveUses: [...me.moveUses.entries()].flatMap(([id, n]) => Array<MoveId>(n).fill(id)),
             }
           : {}),
+        // 切磋（X26）才给额度；其他模式的 view 与以前逐字段一致
+        ...(sparRules ? { skillUsesLeft: me.skillUses } : {}),
       },
       foe: {
         weapons: foe.f.weapons,
@@ -1380,7 +1435,8 @@ function runFight(
       action.kind === 'skill' &&
       me.f.skills.includes(action.skill) &&
       ACTIVE_SKILLS.includes(action.skill) &&
-      !me.used.has(action.skill)
+      !me.used.has(action.skill) &&
+      (!sparRules || me.skillUses > 0)
     ) {
       return action;
     }
@@ -1472,6 +1528,23 @@ function runFight(
     } else if (action.kind === 'skill') {
       me.used.add(action.skill);
       const foe = sides[self ^ 1];
+      // 切磋（X26）：真正执行主动技就扣一次额度（被闪避也扣）；聚气后的自动释放不走这里，不重复扣
+      if (sparRules) {
+        me.skillUses -= 1;
+        // 需要判定的主动技固定抽一次命中随机数；招牌必中（以及对方睡着 / 入梦 / 飘着）也照抽，
+        // 换招不会无意义地挪动后续随机序列
+        if (SPAR_DODGE_SKILLS.includes(action.skill)) {
+          const hitRoll = rng();
+          const sure = SPAR_SURE_SKILLS.includes(action.skill) || asleep(foe);
+          if (!sure && hitRoll < dodgeRate(foe)) {
+            // 被闪避：不掉血、不回血、不附加控制 / 封印 / 送走 / 后劲，也不消耗魂影 / 泡泡 / 护身印。
+            // 吃苦吃亏仍可清掉自己的墨汁（自身效果），但吃不到对方任何东西。
+            if (action.skill === 'eat-hardship') me.blind = 0;
+            events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
+            return action;
+          }
+        }
+      }
       if (action.skill === 'bloom') {
         const heal = Math.ceil((me.f.hp * 18) / 100);
         me.hp = Math.min(me.f.hp, me.hp + heal);
@@ -1562,7 +1635,7 @@ function runFight(
         events.push({ actor: self, kind: 'skill', skill: 'myriad-self', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'dream-chant') {
-        // 魂牵梦绕：必中伤害；控住就把对方神魂牵进梦里，下一拍动不了（入梦期间挨打不判闪避，同睡着）
+        // 魂牵梦绕：非切磋必中（切磋按 dodgeRate 判定）；控住就把对方神魂牵进梦里，下一拍动不了（入梦期间挨打不判闪避，同睡着）
         const applied = dealDamage(
           self,
           14 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * CHANT_HP_SHARE),
@@ -1601,7 +1674,7 @@ function runFight(
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'dragon-palm') {
-        // 降龙十八掌（X16）：必中；「亢龙有悔」的后劲留给下一次法宝 / 空手的第一下
+        // 降龙十八掌（X16）：非切磋必中（切磋按 dodgeRate 判定）；「亢龙有悔」的后劲留给下一次法宝 / 空手的第一下
         const applied = dealDamage(
           self,
           DRAGON_PALM_BASE +
@@ -1620,7 +1693,7 @@ function runFight(
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
       if (action.skill === 'farewell-wind') {
-        // 送友风（X16）：必中伤害；控住就飘起来跳过下一拍（飘着时挨打不判闪避）
+        // 送友风（X16）：非切磋必中（切磋按 dodgeRate 判定）；控住就飘起来跳过下一拍（飘着时挨打不判闪避）
         const applied = dealDamage(
           self,
           FAREWELL_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FAREWELL_HP_SHARE),
@@ -1650,7 +1723,7 @@ function runFight(
         }
       }
       if (action.skill === 'myriad-palm') {
-        // 万我大手印（X21）：必中；一掌把对方的法宝攥住，下一次出手用不了法宝
+        // 万我大手印（X21）：非切磋必中（切磋按 dodgeRate 判定）；一掌把对方的法宝攥住，下一次出手用不了法宝
         const applied = dealDamage(
           self,
           PALM_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * PALM_HP_SHARE),
@@ -1708,7 +1781,7 @@ function runFight(
         }
       }
       if (action.skill === 'ghost-hand') {
-        // 鬼手（X22）：必中；一爪掐住对方的招式，下一次出手放不了主动招式
+        // 鬼手（X22）：非切磋必中（切磋按 dodgeRate 判定）；一爪掐住对方的招式，下一次出手放不了主动招式
         const applied = dealDamage(
           self,
           HAND_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * HAND_HP_SHARE),
@@ -1778,7 +1851,7 @@ function runFight(
         }
       }
       if (action.skill === 'ghost-blood') {
-        // 鬼血（X22）：必中；对方驾驭的被动越多，这一口咬得越狠
+        // 鬼血（X22）：非切磋必中（切磋按 dodgeRate 判定）；对方驾驭的被动越多，这一口咬得越狠
         const passives = foe.f.skills.filter((id) => SKILLS[id].kind === '被动').length;
         const applied = dealDamage(
           self,

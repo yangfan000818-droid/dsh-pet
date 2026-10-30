@@ -308,8 +308,11 @@ export interface SparShow {
     seed: string;
     /** 串门切磋的逐手局传 true（X16）：送友风打中时按 `:farewell` 那一路抽送走；隔空切磋不传 */
     farewell?: boolean;
-    /** client：把这一手发给对面（轮到自家带 action，轮到对面不带） */
-    sendTurn?: (body: { index: number; action?: Action }, signal: AbortSignal) => Promise<SparTurnReply>;
+    /** client：把这一手发给对面（轮到自家带 action，轮到对面不带）；认输（X26）带 forfeit */
+    sendTurn?: (
+      body: { index: number; action?: Action; forfeit?: boolean },
+      signal: AbortSignal,
+    ) => Promise<SparTurnReply>;
   };
   /** 对手随 reveal 带来的赛后感言（演完上对手窗口；没有就不说） */
   foeLine?: string;
@@ -388,6 +391,11 @@ export interface FeatureState {
   tribulationFx: FxWindow | null;
   /** 逐手出招（X17）：正在逐手演的心魔；跟 `battle` 一样算「正在打」，快进 / 收摊都看它 */
   liveBattle: LiveBattle | null;
+  /**
+   * 这一场认输怎么收（X26）：心魔 / 切磋开打时注册，演完 / 收摊时清掉。
+   * `null` = 现在没有可认输的对局（历练、渡劫、还没开打都不注册）。
+   */
+  forfeitNow: (() => void) | null;
   /** 出招面板（X17）：开打前选方式 / 手动出招时等一手；收摊、退出一起关 */
   actionPanel: ActionPanelWindow | null;
   /** 隔空切磋的应战面板（X15）：和出招面板同一套窗口，但不占 `actionPanel`（右键应战仍可兜底） */
@@ -398,7 +406,7 @@ export interface FeatureState {
    * 逐手对传（X19）应战方那一侧的入口：协议层收到 /v1/spar/turn、/v1/duel/turn 时递一手进来；
    * 只有一场，收摊时清掉。发起方（发 HTTP）那边没有。
    */
-  liveTurn: ((index: number, action?: Action) => Promise<SparTurnReply>) | null;
+  liveTurn: ((index: number, action?: Action, forfeit?: boolean) => Promise<SparTurnReply>) | null;
   /** 下次平时打坐最早什么时候（40–60 分钟一次） */
   meditateAt: number;
   /** 正在进行的那一场切磋（见 SparState） */
@@ -478,6 +486,8 @@ export interface FeatureFunctions {
   runTrial(): Promise<void>;
   closeTrial(afterMs: number): void;
   skipTrial(): void;
+  /** 菜单「认输」（X26）：二次确认后停演、按负场记；没有可认输的对局时什么都不做 */
+  forfeitBattle(): Promise<void>;
   runTribulation(wantPill: boolean): Promise<void>;
   closeTribulationFx(afterMs: number): void;
   tribulationActions(practice: Cultivation, actions: Map<string, () => unknown>): void;
@@ -487,10 +497,10 @@ export interface FeatureFunctions {
   inviteSpar(): void;
   hostSpar(visitor: Visitor, card: SparCard, commit: string, live?: boolean): Promise<SparReply>;
   hostReveal(visitor: Visitor, nonce: string, line: string): Promise<SparRevealReply>;
-  sparTurn(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  sparTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   hostDuel(visitor: Visitor, card: SparCard, commit: string, live?: boolean): Promise<DuelAnswer>;
   hostDuelReveal(visitor: Visitor, nonce: string, line: string): void;
-  duelTurn(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  duelTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   hostDuelConceded(visitor: Visitor, why: 'mismatch' | 'late'): void;
   startGuestSpar(invite?: { live: boolean }): Promise<void>;
   runHostSparShow(visitor: Visitor, state: SparState, guestNonce: string, guestLine: string): Promise<void>;

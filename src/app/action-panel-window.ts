@@ -18,7 +18,7 @@ import type { ActionTone } from './battle-live';
 /** 出招方式（X17）：自动照旧整场算好；AI / 手动逐手出招 */
 export type TurnMode = 'auto' | 'ai' | 'manual';
 
-/** 对齐 panelPage：两行卡片、分类标题和网格间距 */
+/** 卡片的最小高度（真实高度按说明文字撑开，这里只用来估一个不会太小的初值） */
 const CARD_HEIGHT = 34;
 const GROUP_HEIGHT = 12;
 const GRID_GAP = 6;
@@ -33,7 +33,11 @@ export const PANEL_MAX_HEIGHT = 420;
 const GAP = 4;
 const TONE_ORDER: readonly ActionTone[] = ['damage', 'control', 'sustain'];
 
-/** 按分组标题和卡片行数估高；每组单独起行，实际高度仍由页面测量校正 */
+/**
+ * 按分组标题和卡片行数估一个**下限高度**（每张卡至少 34px）：长说明会把卡片撑高，估算只是初值，
+ * 真正高度以页面 `contentHeight()` 实测为准，最终仍夹在 `PANEL_MAX_HEIGHT` 内、超出才滚动。
+ * 每组单独起行。
+ */
 export function panelHeight(view: PanelView | null, width: number): number {
   if (!view || view.options.length === 0) return PANEL_HEIGHT;
   // 选方式 / 应战确认也走同一套网格：4 个选项（自动 / AI / 手动 / 不应战）要排两行
@@ -92,6 +96,11 @@ export interface PanelAction {
   tone?: ActionTone;
 }
 
+/** 手动出招面板的可选项：标题给调用方标「主动技剩 X 次」之类的口径 */
+export interface ChooseActionOptions {
+  title?: string;
+}
+
 /** 选方式面板的文案 / 超时：应战类还要一个「不应战」，超时也按不应战算 */
 export interface TurnModePrompt {
   title?: string;
@@ -117,8 +126,13 @@ export interface ActionPanelWindow {
   chooseMode(aiReady: boolean, timeoutMs: number, prompt?: TurnModePrompt): Promise<TurnMode | null>;
   /** 两三项的纯确认（如「应战 / 不应战」）：回 pick（从 1 数），超时 / 关窗回 null */
   choosePrompt(title: string, labels: string[], timeoutMs: number): Promise<number | null>;
-  /** 手动出招：等到点了回 `pick - 1`（0 起的下标），超时（`timeoutMs`）/ 关窗回 `null` */
-  chooseAction(actions: PanelAction[], timeoutMs: number): Promise<number | null>;
+  /** 手动出招：等到点了回 `pick - 1`（0 起的下标），超时（`timeoutMs`）/ 关窗回 `null`。
+   *  第三参可传标题（或 `{ title }`），给「主动技剩 X 次」这类口径；缺省「轮到你了，出一手」。 */
+  chooseAction(
+    actions: PanelAction[],
+    timeoutMs: number,
+    options?: ChooseActionOptions | string,
+  ): Promise<number | null>;
   /** 模拟一次点击（curl 与本机接口用）：`pick` 从 1 数；现在没有等待的选择回 false */
   choose(pick: number): boolean;
   /** 当前等待的选择（GET /app/battle 调试用）；没有就 null */
@@ -329,11 +343,12 @@ export function openActionPanel(
       };
       return ask(view, timeoutMs, null, null);
     },
-    chooseAction(actions, timeoutMs) {
+    chooseAction(actions, timeoutMs, options = {}) {
       const rank = (tone: ActionTone | undefined): number => (tone === undefined ? -1 : TONE_ORDER.indexOf(tone));
+      const title = (typeof options === 'string' ? options : options.title) ?? '轮到你了，出一手';
       const view: PanelView = {
         kind: 'action',
-        title: '轮到你了，出一手',
+        title,
         seconds: Math.max(1, Math.ceil(timeoutMs / 1_000)),
         options: actions
           .map((action, index) => ({
@@ -386,10 +401,12 @@ body{padding:7px 9px;border-radius:12px;background:#f7f2e7;box-shadow:0 3px 10px
 button{font-family:inherit;color:#2b2a26;background:#fffaf0;border:1px solid #cdbfa6;border-radius:12px;cursor:pointer}
 button:hover{border-color:#3f7d5a;background:#fff}
 button:disabled{color:#9a9384;background:#e9e1d2;border-color:#d8cbb4;cursor:default}
-button.action{position:relative;height:34px;min-width:0;padding:3px 7px;text-align:left;overflow:hidden}
+/* 卡片按内容撑高（34px 只是下限）：同一网格行由 grid 拉伸对齐，说明再长也不截 */
+button.action{position:relative;display:flex;flex-direction:column;justify-content:center;min-height:34px;min-width:0;padding:3px 7px;text-align:left;overflow:hidden}
 .action .label{display:block;font-size:13px;line-height:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .action.has-note .label{padding-right:42px}
-.action .effect{display:block;font-size:10.5px;line-height:12px;color:#7b7466;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 技能说明自然换行；长的英文 id 也能断开，不再用 nowrap + 省略号藏效果 */
+.action .effect{display:block;font-size:10.5px;line-height:12px;color:#7b7466;white-space:normal;overflow-wrap:anywhere}
 button.mode{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;height:34px;min-width:0;padding:2px 4px;font-size:12px;line-height:16px;text-align:center;overflow:hidden}
 button.mode .note{position:static;padding:0;background:none;color:#9a9384;font-size:9.5px;line-height:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 button .note{position:absolute;top:3px;right:3px;padding:0 4px;border-radius:7px;background:#efe6d4;color:#6b6254;font-size:9px;line-height:12px;white-space:nowrap}

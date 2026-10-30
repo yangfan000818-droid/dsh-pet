@@ -115,11 +115,11 @@ async function fakeLiveSparHost(): Promise<{
         void server.done.then((result) => (events = result));
         return { ok: true };
       },
-      sparTurn: async (_visitor, index, action) => {
+      sparTurn: async (_visitor, index, action, forfeit) => {
         turnCalls += 1;
         // 每一手故意慢一点：测试好在「打完了吗」之前检查还没记账
         await delay(15);
-        return server ? server.turn(index, action) : { ok: false, reason: 'not-visiting' as const };
+        return server ? server.turn(index, action, forfeit) : { ok: false, reason: 'not-visiting' as const };
       },
       duel: async () => ({ ok: false, reason: 'off' as const }),
       duelReveal: noop,
@@ -176,8 +176,8 @@ async function fakeLiveDuelHost(): Promise<{
         server.skip();
         void server.done.then((result) => (events = result));
       },
-      duelTurn: async (_visitor, index, action) =>
-        server ? server.turn(index, action) : { ok: false, reason: 'not-visiting' as const },
+      duelTurn: async (_visitor, index, action, forfeit) =>
+        server ? server.turn(index, action, forfeit) : { ok: false, reason: 'not-visiting' as const },
       duelConceded: noop,
       left: noop,
     },
@@ -911,3 +911,142 @@ function cardFighterFor(name: string, card: SparCard): Fighter {
     skills: [...card.skills],
   };
 }
+
+test('X26 串门切磋逐手局（客人）：菜单认输二次确认后双方拿到同一场 forfeit 结局', async () => {
+  const clicks: string[] = [];
+  windows.length = 0;
+  const fake = await fakeLiveSparHost();
+  const beaconPort = await freeUdpPort();
+  const beacon = createSocket('udp4');
+  beacon.on('error', () => undefined);
+  const payload = encodeBeacon({ id: fake.id, owner: '测试邻居', pet: '大个', port: fake.port });
+  const sendBeacon = () => beacon.send(payload, beaconPort, '127.0.0.1', () => undefined);
+  sendBeacon();
+  const timer = setInterval(sendBeacon, 300);
+  const config = visitConfig();
+  config.visit.hosting = false;
+  config.visit.visiting = true;
+  try {
+    await withFeatures(
+      {
+        config,
+        cultivation: cultivationEarly(),
+        clicks,
+        modeTimeoutMs: 2_000,
+        actionTimeoutMs: 2_000,
+        turnWaitMs: 2_000,
+        beacon: { port: beaconPort, targets: () => [] },
+      },
+      async (features, said, _bodies, home, extras) => {
+        const { menus } = extras;
+        emitPetBounds({ x: 100, y: 100, marginL: 0, marginT: 0, size: 200, bottomPad: 20 });
+        await until(
+          () => menus.some((labels) => labels.some((label) => label.startsWith('串门/去 '))),
+          '信标听见了邻居',
+          400,
+        );
+        clicks.push('串门/去 测试邻居 家');
+        await until(() => menus.some((labels) => labels.includes('串门/找主人家的宠物切磋')), '切磋项');
+        clicks.push('串门/找主人家的宠物切磋');
+        await pickPanel(features, 1, '自动');
+        await until(() => fake.turns() > 0, '对传了一手', 800);
+        await until(() => (menus[menus.length - 1] ?? []).includes('修炼/认输'), '打的时候有认输项');
+        clicks.push('修炼/认输');
+        await until(() => /确定认输/.test(features.battle.state()?.title ?? ''), '认输二次确认');
+        assert.ok(features.battle.choose(2), '确认认输');
+        await until(() => fake.done() !== null, '对面也按认输收场', 1_000);
+        await until(() => fightCount(home) === 1, '认输记账', 1_000);
+        const events = fake.done()!;
+        const end = events[events.length - 1]!;
+        assert.equal(end.kind === 'end' && end.reason, 'forfeit', '双方拿到同一场 forfeit 结局');
+        assert.equal(end.kind === 'end' && end.winner, 0, '认输方（客人）判负');
+        const record = cultivationSave(home)!.record as { wins: number; losses: number };
+        assert.equal(record.losses, 1, '客人记负场');
+        assert.equal(record.wins, 0, '主人家的胜场不在自家这里');
+        assert.ok(!said.some((text) => text.includes('切磋断了')), '这一场不是掉线');
+      },
+    );
+  } finally {
+    clearInterval(timer);
+    beacon.close();
+    await fake.host.close();
+    env.battleReplies = [];
+    env.battleHold = null;
+  }
+});
+
+test('X26 隔空切磋逐手局（应战方）：对面认输，双方拿到同一场 forfeit 结局，自家记胜场', async () => {
+  const clicks: string[] = [];
+  windows.length = 0;
+  const challenger = generateVisitIdentity();
+  const ownNonce = 'c'.repeat(64);
+  const config = visitConfig();
+  config.visit.hosting = true;
+  await withFeatures(
+    {
+      config,
+      cultivation: cultivationEarly(),
+      neighbors: { neighbors: [neighborRecord(challenger.id, '小李', '阿花')] },
+      clicks,
+      modeTimeoutMs: 2_000,
+      turnWaitMs: 10_000,
+    },
+    async (features, said, _bodies, home, extras) => {
+      emitPetBounds({ x: 100, y: 100, marginL: 0, marginT: 0, size: 200, bottomPad: 20 });
+      const { port, hostId } = await hostedApp(home, extras);
+      const target = { address: '127.0.0.1', port };
+      const asking = sendDuel(target, hostId, { owner: '小李', pet: '阿花' }, challenger, {
+        mode: SPAR_LIVE_MODE,
+        card: guestCard(),
+        commit: sparCommit(ownNonce),
+      });
+      await until(() => features.battle.state() !== null, '应战面板');
+      // 手动应战：应战方停在等点招那一手，挑战方这时认输才测得到「对局进行中」
+      assert.equal(features.battle.choose(3), true, '选手动应战');
+      const reply = await asking;
+      assert.ok(reply.ok, `应战没成：${JSON.stringify(reply)}`);
+      if (!reply.ok) return;
+      assert.deepEqual(await sendDuelReveal(target, { token: reply.token, nonce: ownNonce, line: '' }), { ok: true });
+      const [hostSide, guestSide] = fairSparPair(cardFighterFor('桌宠', reply.card), {
+        name: '阿花',
+        hp: 56,
+        power: 5,
+        agility: 5,
+        speed: 5,
+        weapons: ['poker'],
+        skills: ['dove'],
+      });
+      const client = startLiveClient({
+        a: hostSide,
+        b: guestSide,
+        seed: `${ownNonce}:${reply.nonce}`,
+        local: 1,
+        show: silent,
+        lineRng: rngFrom(`${ownNonce}:${reply.nonce}:lines`),
+        damageScale: SPAR_DAMAGE_SCALE,
+        maxHitShare: SPAR_MAX_HIT_SHARE,
+        decide: async () => null,
+        think: noop,
+        log: noop,
+        waitMs: 10_000,
+        sendTurn: (body, signal) => sendDuelTurn(target, { token: reply.token, ...body }, signal),
+      });
+      // 挑战方这边的演出没有窗口，快进掉；协议照常一手一手传
+      client.skip();
+      await until(() => windowOn('/app/arena') !== undefined, '应战方开打', 800);
+      // 应战方轮到自家、面板等点招：这时对局一定还没打完
+      await until(() => features.battle.state()?.kind === 'action', '应战方等点招', 2_000);
+      // 挑战方这一手认输：应战方（app）也要按同一场 forfeit 收场，记自家胜场
+      client.forfeit();
+      const events = await client.done;
+      assert.ok(events, '认输链路没断');
+      const end = events![events.length - 1]!;
+      assert.equal(end.kind === 'end' && end.reason, 'forfeit', '挑战方拿到 forfeit 结局');
+      assert.equal(end.kind === 'end' && end.winner, 0, '认输方（挑战方）判负');
+      await until(() => fightCount(home) === 1, '应战方按同一场记账', 1_000);
+      const record = cultivationSave(home)!.record as { wins: number; losses: number };
+      assert.equal(record.wins, 1, '应战方记胜场');
+      assert.ok(!said.some((text) => text.includes('切磋断了')), '不是掉线');
+    },
+  );
+});

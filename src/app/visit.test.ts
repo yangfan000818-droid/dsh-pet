@@ -1914,6 +1914,83 @@ test('逐手局：对面出的招不合法、等超时，都按掉线', async ()
   assert.deepEqual(illegal, { ok: false, reason: 'illegal' });
 });
 
+test('逐手局协议：forfeit 经 /v1/spar/turn 结构校验后递给 sparTurn，应答带回认输通知', async () => {
+  const seen: Array<{ index: number; action: unknown; forfeit: boolean | undefined }> = [];
+  await withHost(
+    {
+      spar: async () => ({ ok: true, card: sparCardOf(aFighter, 4), nonce: 'b'.repeat(64) }),
+      reveal: async () => ({ ok: true }),
+      sparTurn: async (_visitor, index, action, forfeit) => {
+        seen.push({ index, action, forfeit });
+        return { ok: true, forfeit: true };
+      },
+    },
+    async (host, port) => {
+      const target = { address: '127.0.0.1', port };
+      const [answer] = await knockAndAnswer(host, port, true);
+      const token = answer.ok ? answer.token : '';
+      await sendSpar(target, { token, mode: SPAR_LIVE_MODE, card: aCard, commit: sparCommit('c'.repeat(64)) });
+      await sendReveal(target, { token, nonce: 'c'.repeat(64), line: '' });
+
+      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: true }), {
+        ok: true,
+        forfeit: true,
+      });
+      assert.deepEqual(seen, [{ index: 2, action: undefined, forfeit: true }]);
+
+      // 认输不能夹带出手；forfeit 只认布尔值。结构不对的不会递进这一场
+      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: true, action: { kind: 'unarmed' } }), {
+        ok: false,
+        reason: 'bad-request',
+      });
+      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: 'yes' as never }), {
+        ok: false,
+        reason: 'bad-request',
+      });
+      assert.equal(seen.length, 1);
+    },
+  );
+});
+
+test('隔空切磋逐手局协议：forfeit 标记同样过 turnBody 校验并带回认输通知', async () => {
+  const hostIdentity = generateVisitIdentity();
+  const challenger = generateVisitIdentity();
+  const hostNonce = 'b'.repeat(64);
+  const seen: Array<{ index: number; action: unknown; forfeit: boolean | undefined }> = [];
+  await withHost(
+    {
+      identity: hostIdentity,
+      duel: async () => ({ ok: true, card: sparCardOf(aFighter, 4), nonce: hostNonce }),
+      duelReveal: () => undefined,
+      duelTurn: async (_visitor, index, action, forfeit) => {
+        seen.push({ index, action, forfeit });
+        return { ok: true, forfeit: true };
+      },
+    },
+    async (_host, port) => {
+      const target = { address: '127.0.0.1', port };
+      const reply = await sendDuel(target, hostIdentity.id, me, challenger, {
+        mode: SPAR_LIVE_MODE,
+        card: aCard,
+        commit: sparCommit('c'.repeat(64)),
+      });
+      assert.ok(reply.ok, `逐手挑战没应：${JSON.stringify(reply)}`);
+      const token = reply.ok ? reply.token : '';
+      assert.deepEqual(await sendDuelReveal(target, { token, nonce: 'c'.repeat(64), line: '' }), { ok: true });
+      assert.deepEqual(await sendDuelTurn(target, { token, index: 0, forfeit: true }), {
+        ok: true,
+        forfeit: true,
+      });
+      assert.deepEqual(seen, [{ index: 0, action: undefined, forfeit: true }]);
+      assert.deepEqual(await sendDuelTurn(target, { token, index: 0, forfeit: true, action: { kind: 'unarmed' } }), {
+        ok: false,
+        reason: 'bad-request',
+      });
+      assert.equal(seen.length, 1);
+    },
+  );
+});
+
 test('隔空切磋逐手局：/v1/duel/turn 用应战后留着的令牌；自动局 reveal 后会话收掉', async () => {
   const hostIdentity = generateVisitIdentity();
   const challenger = generateVisitIdentity();

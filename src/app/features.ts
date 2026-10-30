@@ -112,6 +112,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
     trialWindowGroups: new Set(),
     tribulationFx: null,
     liveBattle: null,
+    forfeitNow: null,
     actionPanel: null,
     duelPrompt: null,
     adventureTurn: null,
@@ -230,6 +231,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
       // 逐手出招（X17）：等着的 AI / 手动选择作废，面板与窗口一起关
       state.liveBattle?.dispose();
       state.liveBattle = null;
+      state.forfeitNow = null;
       state.actionPanel?.close();
       state.actionPanel = null;
       state.duelPrompt?.close();

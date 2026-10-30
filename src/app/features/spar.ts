@@ -32,6 +32,7 @@ import {
 } from '../visit';
 import type { SparCard, SparFailure, SparReply, SparRevealReply, SparTurnReply, Visitor } from '../visit';
 import { CLOSE_HOLD_MS, lazyFns } from './context';
+import { chooseManualAction } from './manual-action';
 import type { FeatureContext, GuestOffOptions, Hosting, SparShow, SparState, SparWindows, Trip } from './context';
 import { errorText } from './util';
 
@@ -102,7 +103,7 @@ export interface Spar {
   inviteSpar(): void;
   hostSpar(visitor: Visitor, card: SparCard, commit: string, live?: boolean): Promise<SparReply>;
   hostReveal(visitor: Visitor, nonce: string, line: string): Promise<SparRevealReply>;
-  sparTurn(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply>;
+  sparTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   startGuestSpar(invite?: { live: boolean }): Promise<void>;
   runSparShow(show: SparShow): Promise<BattleEvent[] | null>;
   runHostSparShow(visitor: Visitor, state: SparState, guestNonce: string, guestLine: string): Promise<void>;
@@ -142,6 +143,7 @@ export function createSpar(ctx: FeatureContext): Spar {
     // 逐手局（X19）在 liveBattle 里跑；出招面板也一起收（等着的 AI / 手动选择作废）
     ctx.state.liveBattle?.dispose();
     ctx.state.liveBattle = null;
+    ctx.state.forfeitNow = null;
     ctx.state.liveTurn = null;
     ctx.state.actionPanel?.close();
     ctx.state.actionPanel = null;
@@ -242,8 +244,12 @@ export function createSpar(ctx: FeatureContext): Spar {
       );
     // 对手要播的动画先取到窗口里（X7：换源不等网络，出手才和飞行物对得上）
     foe.preload(SHOW_ANIMS);
-    const arena = openArenaWindow(electron, `${new URL(deps.petBase).origin}/app/arena`, homePet.box, () =>
-      foe.bounds(),
+    const arena = openArenaWindow(
+      electron,
+      `${new URL(deps.petBase).origin}/app/arena`,
+      homePet.box,
+      () => foe.bounds(),
+      { initiallyVisible: false },
     );
     // 特效层：对手就是这一场的对手窗口（默认粉色，不用心魔配色）
     const fx = openShowFx(
@@ -319,22 +325,17 @@ export function createSpar(ctx: FeatureContext): Spar {
       }
       if (ctx.state.disposed || signal.aborted) return null;
       const panel = ensureManualPanel();
-      const choices = legalChoices(view);
-      const pick = await panel.chooseAction(
-        choices.map((choice) => ({
-          label: choice.label,
-          ...(choice.note ? { note: choice.note } : {}),
-          effect: choice.effect,
-          tone: choice.tone,
-        })),
-        deps.actionTimeoutMs ?? 20_000,
-      );
-      if (pick === null) {
-        ctx.log('逐手对传：手动没点，按后备挑法');
-        return null;
-      }
-      const choice = choices[pick];
-      return choice ? { action: choice.action } : null;
+      return chooseManualAction({
+        panel,
+        choices: legalChoices(view),
+        timeoutMs: deps.actionTimeoutMs ?? 20_000,
+        title:
+          view.you.skillUsesLeft === undefined
+            ? '轮到你了，出一手'
+            : `轮到你了，出一手 · 主动技剩 ${view.you.skillUsesLeft} 次`,
+        onTimeout: () => ctx.log('逐手对传：手动没点，按后备挑法'),
+        forfeit: () => ctx.state.forfeitNow?.(),
+      });
     };
     let events: BattleEvent[] | null;
     if (show.live) {
@@ -380,14 +381,19 @@ export function createSpar(ctx: FeatureContext): Spar {
               ready: held,
             });
       ctx.state.liveBattle = live;
+      // 认输（X26）：菜单与手动面板都走这一条；双方由 live 层把 forfeit 结局对齐
+      const forfeitHook = (): void => live.forfeit();
+      ctx.state.forfeitNow = forfeitHook;
       const turn = live.turn;
       if (show.live.role === 'server') ctx.state.liveTurn = turn;
+      arena.setVisible(true);
       show.beforeShow?.();
       void refreshMenu();
       // 逐手一场事先不知道多久：占住宠物（holdPet 会夹到 /lock 的上限），第一段演出由 ready 挡在锁后面
       await held;
       events = await live.done;
       if (ctx.state.liveBattle === live) ctx.state.liveBattle = null;
+      if (ctx.state.forfeitNow === forfeitHook) ctx.state.forfeitNow = null;
       if (show.live.role === 'server' && ctx.state.liveTurn === turn) ctx.state.liveTurn = null;
       releasePet(ctx.state.disposed ? 0 : CLOSE_HOLD_MS);
     } else {
@@ -399,6 +405,7 @@ export function createSpar(ctx: FeatureContext): Spar {
       ]);
       const steps = show.local === 1 ? swapSides(ordered) : ordered;
       ctx.state.battle = new BattleShow(steps, sides);
+      arena.setVisible(true);
       show.beforeShow?.();
       void refreshMenu();
       const current = ctx.state.battle;
@@ -567,14 +574,14 @@ export function createSpar(ctx: FeatureContext): Spar {
   }
 
   /** 逐手局应战方这一侧收到的一手（X19）：只有这一场正在逐手、客人也对得上才递进去 */
-  async function sparTurn(visitor: Visitor, index: number, action?: Action): Promise<SparTurnReply> {
+  async function sparTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply> {
     const state = ctx.state.spar;
     const current = ctx.state.hosting;
     if (!state?.live || !current || current.visitor.id !== visitor.id || current.visitor.address !== visitor.address)
       return { ok: false, reason: 'not-visiting' };
     const turn = ctx.state.liveTurn;
     if (!turn) return { ok: false, reason: 'late' };
-    return turn(index, action);
+    return turn(index, action, forfeit);
   }
 
   /**

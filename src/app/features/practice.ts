@@ -22,6 +22,7 @@ export interface Practice {
 export function createPractice(ctx: FeatureContext): Practice {
   const {
     ensureAdventure,
+    forfeitBattle,
     petRequest,
     refreshMenu,
     runAdventure,
@@ -203,8 +204,11 @@ export function createPractice(ctx: FeatureContext): Practice {
       }
     }
     // 心魔试炼：没在打、没出门、家里没客人、也没有挂着的隔空挑战时才有；打的时候换成「快进」
-    if (ctx.state.battle || ctx.state.liveBattle) actions.set(`${MENU_CULTIVATION_GROUP}/快进`, skipTrial);
-    else if (
+    if (ctx.state.battle || ctx.state.liveBattle) {
+      actions.set(`${MENU_CULTIVATION_GROUP}/快进`, skipTrial);
+      // 认输（X26）：只有心魔 / 切磋开打时注册了收尾回调才有；二次确认在单独一块小面板里问
+      if (ctx.state.forfeitNow) actions.set(`${MENU_CULTIVATION_GROUP}/认输`, () => void forfeitBattle());
+    } else if (
       ctx.state.trip === null &&
       ctx.state.hosting === null &&
       ctx.state.duelWait === null &&

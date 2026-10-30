@@ -163,6 +163,8 @@ function fakeElectron() {
   const created: Record<string, unknown>[] = [];
   const executed: string[] = [];
   const bounds: Rect[] = [];
+  const shown: number[] = [];
+  const hidden: number[] = [];
   let destroyed = false;
   const win: WindowLike = {
     isDestroyed: () => destroyed,
@@ -172,8 +174,9 @@ function fakeElectron() {
     setAlwaysOnTop: () => undefined,
     setVisibleOnAllWorkspaces: () => undefined,
     loadURL: () => Promise.resolve(),
-    showInactive: () => undefined,
+    showInactive: () => void shown.push(1),
     show: () => undefined,
+    hide: () => void hidden.push(1),
     focus: () => undefined,
     once: () => undefined,
     destroy: () => {
@@ -201,6 +204,8 @@ function fakeElectron() {
     created,
     executed,
     bounds,
+    shown,
+    hidden,
     get destroyed() {
       return destroyed;
     },
@@ -243,6 +248,56 @@ test('openArenaWindow：透明 / 置顶 / 不可聚焦 / 整窗穿透，加载�
   assert.match(fake.executed[0], /^arena\.place\(\{/);
   assert.match(fake.executed[1], /^arena\.update\(\{.*"percent":100/);
   assert.equal(fake.executed[1].includes('innerHTML'), false);
+});
+
+test('X26 血条：默认加载完才显示，旧调用方（历练）行为不变', async () => {
+  const fake = fakeElectron();
+  openArenaWindow(
+    fake.electron,
+    'http://127.0.0.1:1/app/arena',
+    () => home,
+    () => foeWindow,
+  );
+  assert.equal(fake.shown.length, 0, '加载前不亮');
+  await new Promise((done) => setImmediate(done));
+  assert.equal(fake.shown.length, 1, '加载完显示一次');
+});
+
+test('X26 血条：initiallyVisible:false 加载完也不亮，正式开演的 setVisible(true) 才显示', async () => {
+  const fake = fakeElectron();
+  const arena = openArenaWindow(
+    fake.electron,
+    'http://127.0.0.1:1/app/arena',
+    () => home,
+    () => foeWindow,
+    { initiallyVisible: false },
+  );
+  await new Promise((done) => setImmediate(done));
+  assert.equal(fake.shown.length, 0, '选出招方式时没有血条');
+  arena.setVisible(true);
+  assert.equal(fake.shown.length, 1);
+  arena.setVisible(false);
+  assert.equal(fake.hidden.length, 1);
+  arena.setVisible(true);
+  assert.equal(fake.shown.length, 2, '收起后还能再亮');
+});
+
+test('X26 血条：load 前调 setVisible 只记目标状态，加载完按目标显示、不抢先闪现', async () => {
+  const fake = fakeElectron();
+  const arena = openArenaWindow(
+    fake.electron,
+    'http://127.0.0.1:1/app/arena',
+    () => home,
+    () => foeWindow,
+    { initiallyVisible: false },
+  );
+  arena.setVisible(true);
+  assert.equal(fake.shown.length, 0, 'load 之前绝不显示');
+  arena.setVisible(false);
+  assert.equal(fake.hidden.length, 0, 'load 前不调用 hide，只记状态');
+  arena.setVisible(true);
+  await new Promise((done) => setImmediate(done));
+  assert.equal(fake.shown.length, 1, '加载完按最后一次目标状态显示');
 });
 
 test('血条让位：加载完把宠物 / 对手窗口提到前面，别的窗口不动', async () => {

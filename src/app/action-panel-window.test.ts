@@ -4,7 +4,14 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PANEL_HEIGHT, PANEL_MAX_HEIGHT, openActionPanel, panelBounds, panelHeight } from './action-panel-window.ts';
+import {
+  PANEL_HEIGHT,
+  PANEL_MAX_HEIGHT,
+  openActionPanel,
+  panelBounds,
+  panelHeight,
+  panelPage,
+} from './action-panel-window.ts';
 import type { PanelView } from './action-panel-window.ts';
 import type { Rect, WindowElectron, WindowLike } from './visit-windows.ts';
 
@@ -323,4 +330,102 @@ test('X17 出招面板：按伤害、控制、回复稳定分组，原始 pick �
   assert.equal(panel.choose(4), true);
   assert.equal(await deciding, 3, '展示位置变了，仍回原始动作下标');
   panel.close();
+});
+
+test('X26 出招面板：技能说明自然换行，不用省略号藏效果；卡片按内容撑高', () => {
+  const effect = panelPage.match(/\.action \.effect\{([^}]*)\}/)?.[1] ?? '';
+  assert.ok(effect.includes('white-space:normal'), '说明允许换行');
+  assert.equal(effect.includes('nowrap'), false, '不再强制单行');
+  assert.equal(effect.includes('ellipsis'), false, '不再用省略号藏效果');
+  assert.equal(effect.includes('overflow:hidden'), false, '说明不被裁掉');
+  assert.ok(effect.includes('overflow-wrap:anywhere'), '长英文 id 也能断行');
+  // 卡片只留最小高度：长说明把它撑高，同一行由 grid 拉伸对齐
+  const card = panelPage.match(/button\.action\{([^}]*)\}/)?.[1] ?? '';
+  assert.ok(card.includes('min-height:34px'), '34px 只是下限');
+  assert.equal(/(^|;)height:34px/.test(card.replace(/\s/g, '')), false, '不再固定 34px 高');
+  assert.match(panelPage, /\.action \.label\{[^}]*white-space:nowrap/, '名称仍保持单行');
+  // 超过最大高度才在窗内滚动
+  assert.match(panelPage, /#buttons\{[^}]*overflow-y:auto/);
+});
+
+test('X26 出招面板：长说明按页面实测高度撑开，超过 420 才夹到最大高度滚动', async () => {
+  const win = fakeWindow();
+  const sizes: Rect[] = [];
+  win.setBounds = (rect: Rect) => void sizes.push(rect);
+  win.webContents.executeJavaScript = (code: string) => {
+    win.calls.push(code);
+    // 模拟一行长说明被折成很多行：页面量回来的高度远大于 34px × 卡片数
+    return Promise.resolve(code.startsWith('panel.contentHeight(') ? 260.2 : undefined);
+  };
+  const panel = openActionPanel(
+    fakeElectron(win),
+    'http://127.0.0.1:1/app/panel',
+    () => arena,
+    () => null,
+  );
+  void panel.chooseAction(
+    [{ label: '狮子吼', effect: '一声吼出，声浪扫过全场，可能震晕，且后续两回合伤害提高。' }],
+    1_000,
+  );
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(sizes[sizes.length - 1]?.height, 261, '按实测高度校正，不按固定 34px 估算裁掉底部');
+  panel.close();
+
+  const clamped = fakeWindow();
+  const clampedSizes: Rect[] = [];
+  clamped.setBounds = (rect: Rect) => void clampedSizes.push(rect);
+  clamped.webContents.executeJavaScript = (code: string) => {
+    clamped.calls.push(code);
+    return Promise.resolve(code.startsWith('panel.contentHeight(') ? 900 : undefined);
+  };
+  const tall = openActionPanel(
+    fakeElectron(clamped),
+    'http://127.0.0.1:1/app/panel',
+    () => arena,
+    () => null,
+  );
+  void tall.chooseAction([{ label: '狮子吼', effect: '很长很长的说明' }], 1_000);
+  await new Promise((done) => setTimeout(done, 0));
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(clampedSizes[clampedSizes.length - 1]?.height, PANEL_MAX_HEIGHT, '再高也夹在 420，剩下的窗内滚动');
+  tall.close();
+});
+
+test('X26 出招面板：chooseAction 可传标题（对象或字符串），旧调用仍用默认标题', async () => {
+  const win = fakeWindow();
+  const panel = openActionPanel(
+    fakeElectron(win),
+    'http://127.0.0.1:1/app/panel',
+    () => arena,
+    () => null,
+  );
+  void panel.chooseAction([{ label: '水枪' }], 1_000, { title: '主动技剩 2 次' });
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(panel.state()?.title, '主动技剩 2 次');
+  panel.close();
+
+  const direct = fakeWindow();
+  const directPanel = openActionPanel(
+    fakeElectron(direct),
+    'http://127.0.0.1:1/app/panel',
+    () => arena,
+    () => null,
+  );
+  void directPanel.chooseAction([{ label: '水枪' }], 1_000, '主动技剩 1 次');
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(directPanel.state()?.title, '主动技剩 1 次');
+  directPanel.close();
+
+  const legacy = fakeWindow();
+  const legacyPanel = openActionPanel(
+    fakeElectron(legacy),
+    'http://127.0.0.1:1/app/panel',
+    () => arena,
+    () => null,
+  );
+  void legacyPanel.chooseAction([{ label: '水枪' }], 1_000);
+  await new Promise((done) => setTimeout(done, 0));
+  assert.equal(legacyPanel.state()?.title, '轮到你了，出一手', '不传第三参保持旧标题');
+  legacyPanel.close();
 });

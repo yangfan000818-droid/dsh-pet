@@ -4,10 +4,10 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { legalChoices, startLiveClient, startLiveServer, toneOf } from './battle-live.ts';
+import { legalChoices, startLiveBattle, startLiveClient, startLiveServer, toneOf } from './battle-live.ts';
 import type { LiveVersus } from './battle-live.ts';
 import { fight, rngFrom } from './battle.ts';
-import type { BattleView, Controller, Fighter } from './battle.ts';
+import type { BattleEvent, BattleView, Controller, Fighter } from './battle.ts';
 import type { ShowSides } from './battle-show.ts';
 
 const a: Fighter = {
@@ -252,4 +252,290 @@ test('X17 出招分类：legalChoices 带上 tone，pick 与动作顺序不变',
       'damage',
     ],
   );
+});
+
+// ---------- X26 认输与切磋口径 ----------
+
+const fastA: Fighter = { ...a, speed: 10 };
+const slowB: Fighter = { ...b, speed: 1 };
+const slowA: Fighter = { ...a, speed: 1 };
+const fastB: Fighter = { ...b, speed: 10 };
+
+/** 一直不返回的出招（模拟 AI / 手动还在等） */
+function hold(): { started: Promise<void>; decide: () => Promise<never> } {
+  let notify: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    notify = resolve;
+  });
+  return {
+    started,
+    decide: () => {
+      notify();
+      return new Promise<never>(() => undefined);
+    },
+  };
+}
+
+function endOf(events: BattleEvent[]): Extract<BattleEvent, { kind: 'end' }> {
+  const end = events[events.length - 1];
+  assert.equal(end?.kind, 'end', '最后一条是 end');
+  return end as Extract<BattleEvent, { kind: 'end' }>;
+}
+
+const reasonOf = (end: Extract<BattleEvent, { kind: 'end' }>): string => (end as { reason: string }).reason;
+
+function liveServer(aFighter: Fighter, bFighter: Fighter, decide: () => Promise<never>, waitMs = 2_000): LiveVersus {
+  return startLiveServer({
+    a: aFighter,
+    b: bFighter,
+    seed,
+    local: 0,
+    show: silent,
+    lineRng: lineRng(),
+    decide,
+    think: noop,
+    log: (message) => logs.push(message),
+    waitMs,
+  });
+}
+
+function liveClient(
+  server: LiveVersus,
+  aFighter: Fighter,
+  bFighter: Fighter,
+  decide: () => Promise<never>,
+): LiveVersus {
+  return startLiveClient({
+    a: aFighter,
+    b: bFighter,
+    seed,
+    local: 1,
+    show: silent,
+    lineRng: lineRng(),
+    decide,
+    think: noop,
+    log: (message) => logs.push(message),
+    waitMs: 2_000,
+    sendTurn: (body) => server.turn(body.index, body.action, body.forfeit),
+  });
+}
+
+test('X26 心魔本地认输：done 给出 forfeit 收场，气血用已确认的最新值', async () => {
+  logs.length = 0;
+  const held = hold();
+  const battle = startLiveBattle({
+    a,
+    b,
+    seed,
+    mode: 'ai',
+    show: silent,
+    lineRng: lineRng(),
+    decide: held.decide,
+    think: noop,
+    log: (message) => logs.push(message),
+  });
+  await held.started;
+  battle.forfeit();
+  const events = await battle.done;
+  assert.ok(events, '认输回正常事件串，不是 null');
+  const end = endOf(events);
+  assert.equal(reasonOf(end), 'forfeit');
+  assert.equal(end.winner, 1, '心魔（引擎 1 号）获胜');
+  const before = events[events.length - 2]!;
+  assert.ok('hp' in before, '前一条带着已确认的气血');
+  assert.deepEqual(end.hp, before.hp);
+  assert.ok(!logs.some((message) => message.includes('按后备挑法')), '认输后不再落一手');
+});
+
+test('X26 原 dispose / skip 行为不变：收摊回 null，快进照常打完', async () => {
+  const disposedHeld = hold();
+  const disposed = startLiveBattle({
+    a,
+    b,
+    seed,
+    mode: 'ai',
+    show: silent,
+    lineRng: lineRng(),
+    decide: disposedHeld.decide,
+    think: noop,
+    log: noop,
+  });
+  await disposedHeld.started;
+  disposed.dispose();
+  assert.equal(await disposed.done, null);
+
+  const skipped = startLiveBattle({
+    a,
+    b,
+    seed,
+    mode: 'ai',
+    show: silent,
+    lineRng: lineRng(),
+    decide: async () => null,
+    think: noop,
+    log: noop,
+  });
+  skipped.skip();
+  const events = await skipped.done;
+  assert.ok(events, '快进仍按正常胜负收场');
+  assert.notEqual(reasonOf(endOf(events)), 'forfeit');
+});
+
+test('X26 客户端认输（本地轮到自己）：两边 done 得到同一场 forfeit 结局', async () => {
+  logs.length = 0;
+  const serverHeld = hold();
+  const server = liveServer(slowA, fastB, serverHeld.decide);
+  const clientHeld = hold();
+  const client = liveClient(server, slowA, fastB, clientHeld.decide);
+  server.skip();
+  client.skip();
+  await clientHeld.started; // b 速度更快，客户端先出手
+  client.forfeit();
+  const [clientEvents, serverEvents] = await Promise.all([client.done, server.done]);
+  assert.ok(clientEvents, '发起方不是掉线');
+  assert.ok(serverEvents, '应战方也正常收场');
+  assert.deepEqual(clientEvents, serverEvents, '两边同一场 forfeit 事件');
+  const end = endOf(clientEvents);
+  assert.equal(reasonOf(end), 'forfeit');
+  assert.equal(end.winner, 0, '本地（引擎 1 号）认输，0 号获胜');
+});
+
+test('X26 服务端认输（本地轮到自己）：客户端收到认输通知，两边记账一致', async () => {
+  logs.length = 0;
+  const serverHeld = hold();
+  const server = liveServer(fastA, slowB, serverHeld.decide);
+  const clientHeld = hold();
+  const client = liveClient(server, fastA, slowB, clientHeld.decide);
+  server.skip();
+  client.skip();
+  await serverHeld.started; // a 速度更快，服务端先出手
+  server.forfeit();
+  const [clientEvents, serverEvents] = await Promise.all([client.done, server.done]);
+  assert.ok(clientEvents && serverEvents);
+  assert.deepEqual(clientEvents, serverEvents);
+  const end = endOf(clientEvents);
+  assert.equal(reasonOf(end), 'forfeit');
+  assert.equal(end.winner, 1, '服务端（引擎 0 号）认输，1 号获胜');
+  assert.ok(!logs.some((message) => message.includes('按掉线')), '认输不是掉线');
+});
+
+test('X26 客户端在等对面出手时认输：中止等待，对面请求挂着也能收场', async () => {
+  logs.length = 0;
+  const serverHeld = hold();
+  const server = liveServer(fastA, slowB, serverHeld.decide);
+  const clientHeld = hold();
+  const client = liveClient(server, fastA, slowB, clientHeld.decide);
+  server.skip();
+  client.skip();
+  await serverHeld.started; // 服务端正在想，客户端挂着等
+  client.forfeit();
+  const [clientEvents, serverEvents] = await Promise.all([client.done, server.done]);
+  assert.ok(clientEvents && serverEvents);
+  assert.deepEqual(clientEvents, serverEvents);
+  const end = endOf(clientEvents);
+  assert.equal(reasonOf(end), 'forfeit');
+  assert.equal(end.winner, 0, '客户端认输，服务端获胜');
+});
+
+test('X26 认输网络没送到：客户端按掉线回 null，不伪装成认输成功', async () => {
+  const clientHeld = hold();
+  const client = startLiveClient({
+    a: slowA,
+    b: fastB,
+    seed,
+    local: 1,
+    show: silent,
+    lineRng: lineRng(),
+    decide: clientHeld.decide,
+    think: noop,
+    log: noop,
+    waitMs: 100,
+    sendTurn: () => Promise.reject(new Error('down')),
+  });
+  client.skip();
+  await clientHeld.started;
+  client.forfeit();
+  assert.equal(await client.done, null);
+});
+
+test('X26 认输重复 / 迟到：已结束幂等回认输通知，序号不对回 late 且不提前结算', async () => {
+  logs.length = 0;
+  const serverHeld = hold();
+  const server = liveServer(fastA, slowB, serverHeld.decide);
+  server.skip();
+  // 先递一手空请求，让服务端进入出招等待；这一手等认输结算时回
+  void server.turn(0);
+  await serverHeld.started;
+  // 序号对不上：回 late，这一场继续（不按掉线、不结算）
+  assert.deepEqual(await server.turn(9, undefined, true), { ok: false, reason: 'late' });
+  server.forfeit();
+  const events = await server.done;
+  assert.ok(events);
+  assert.equal(reasonOf(endOf(events)), 'forfeit');
+  // 已结束后重复认输 / 再送一手：都幂等地拿回同一个认输通知，不重复记账
+  assert.deepEqual(await server.turn(0, undefined, true), { ok: true, forfeit: true });
+  assert.deepEqual(await server.turn(0, { kind: 'unarmed' }), { ok: true, forfeit: true });
+});
+
+test('X26 逐手对传原 dispose 行为不变：收摊回 null', async () => {
+  const server = serve();
+  const client = clientWith(server);
+  client.dispose();
+  assert.equal(await client.done, null);
+  server.dispose();
+  assert.equal(await server.done, null);
+});
+
+test('X26 切磋面板：普通主动技不再写必中，招牌招保留必中，skillUsesLeft 供显示', () => {
+  const view: BattleView = {
+    self: 0,
+    hp: [60, 60],
+    maxHp: [60, 60],
+    you: {
+      weapons: [],
+      skills: [
+        'lion-roar',
+        'dream-chant',
+        'dragon-palm',
+        'farewell-wind',
+        'ghost-hand',
+        'ghost-blood',
+        'blue-whale',
+        'finger-sword',
+        'headless-shadow',
+        'tide-cannon',
+        'ancients',
+        'ghost-knock',
+        'bloom',
+      ],
+      used: [],
+      skillUsesLeft: 2,
+    } as BattleView['you'] & { skillUsesLeft?: number },
+    foe: { weapons: [], skills: [] },
+  };
+  const effect = (skill: string): string => {
+    const choice = legalChoices(view).find((item) => item.action.kind === 'skill' && item.action.skill === skill);
+    assert.ok(choice, `清单里有 ${skill}`);
+    return choice.effect;
+  };
+  for (const skill of ['lion-roar', 'dream-chant', 'dragon-palm', 'farewell-wind', 'ghost-hand', 'ghost-blood']) {
+    assert.ok(!effect(skill).includes('必中'), `${skill} 在切磋里不是必中`);
+    assert.ok(effect(skill).includes('可闪避'), `${skill} 标出可闪避`);
+  }
+  for (const skill of ['blue-whale', 'finger-sword', 'headless-shadow', 'ancients', 'ghost-knock']) {
+    assert.ok(effect(skill).includes('必中'), `${skill} 是保留必中的招牌招`);
+  }
+  assert.ok(effect('tide-cannon').includes('必中'));
+  assert.ok(!effect('bloom').includes('可闪避'), '凭空生花是自增益，不判命中');
+  for (const choice of legalChoices(view)) if (choice.action.kind === 'skill') assert.equal(choice.note, '剩 2 次');
+
+  // 非切磋（没有 skillUsesLeft）：口径保持原样
+  const pve: BattleView = {
+    ...view,
+    you: { ...view.you, skillUsesLeft: undefined } as BattleView['you'] & { skillUsesLeft?: number },
+  };
+  const lion = legalChoices(pve).find((item) => item.action.kind === 'skill' && item.action.skill === 'lion-roar')!;
+  assert.ok(lion.effect.includes('可能震晕'));
+  assert.ok(!lion.effect.includes('可闪避'));
+  assert.equal(lion.note, undefined);
 });
