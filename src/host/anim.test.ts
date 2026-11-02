@@ -337,3 +337,44 @@ describe('decideAnim —— rate（倍速，可选）', () => {
     assert.equal(d.ok === true && d.rate, 1.25);
   });
 });
+
+describe('decideAnim —— target（移动终点，可选）', () => {
+  test('移动动作可以带 target，原样透出', () => {
+    const d = decide({ name: '螃蟹走路', target: { x: 0.25, y: 0.75 } });
+    assert.equal(d.ok, true);
+    assert.deepEqual(d.ok === true && d.target, { x: 0.25, y: 0.75 });
+  });
+
+  test('越界坐标夹到 0~1（与 /position 同一口径）', () => {
+    const d = decide({ name: '螃蟹走路', target: { x: -1, y: 2 } });
+    assert.equal(d.ok, true);
+    assert.deepEqual(d.ok === true && d.target, { x: 0, y: 1 });
+  });
+
+  test('不是移动动作 / url 形态 → bad-request（写了也不会挪窗口，不静默忽略）', () => {
+    const idle = decide({ name: '东张西望', target: { x: 0.5, y: 0.5 } });
+    assert.equal(idle.ok, false);
+    assert.equal(idle.ok === false && idle.reason, 'bad-request');
+    assert.match(idle.ok === false ? idle.message : '', /移动动作/);
+    const url = decide({ name: undefined, url: 'https://cdn.example.com/x.webm', target: { x: 0.5, y: 0.5 } });
+    assert.equal(url.ok, false);
+    assert.equal(url.ok === false && url.reason, 'bad-request');
+  });
+
+  test('形状非法 → bad-request', () => {
+    for (const bad of [42, '0.5', [], {}, { x: 0.5 }, { y: 0.5 }, { x: '0.5', y: 0.5 }, { x: NaN, y: 0.5 }]) {
+      const d = decide({ name: '螃蟹走路', target: bad });
+      assert.equal(d.ok, false, JSON.stringify(bad) + ' 不应通过');
+      assert.equal(d.ok === false && d.reason, 'bad-request');
+      assert.match(d.ok === false ? d.message : '', /target/);
+    }
+  });
+
+  test('不传 / null → 通过且 target 缺席（旧行为逐位不变）', () => {
+    for (const target of [undefined, null]) {
+      const d = decide({ name: '螃蟹走路', target });
+      assert.equal(d.ok, true);
+      assert.equal(d.ok === true && d.target, undefined);
+    }
+  });
+});

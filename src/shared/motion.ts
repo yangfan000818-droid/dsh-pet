@@ -10,12 +10,20 @@ export interface MovePlan {
   startRatio: number;
   startYRatio: number;
   targetRatio: number;
+  /** 终点 y 比例。只走横线时与 startYRatio 相同（飞行才可能不同） */
+  targetYRatio: number;
   totalRatio: number;
+  /** y 方向总位移（比例，正 = 向下）。横向移动恒为 0 */
+  totalYRatio: number;
 }
 
 /** 计算一次移动的起点/终点比例坐标；目标越出视口边缘（含边距）时返回 null。
  *  sideAllow = 左右透明边余量（视频画布内宠物身体居中、两侧透明）：边界按"身体"贴边而不是
  *  按"整个视频盒"贴边——宠物能走到屏幕边缘，但身体永不越界（不会漫游到屏幕外丢失）。
+ *
+ *  minRise/maxRise 给了非零值时是**飞行**：y 方向随机位移（正 = 向上），身体上下缘也参与边界
+ *  判定，贴边时自动收短；横向仍按 dir 走。不写时 y 恒定，行为与旧版逐位一致。
+ *  targetX/targetY 给了（两个都给）时直接以该点为终点：不再随机距离 / 垂直区间，其余边界规则不变。
  *
  *  areas 传入时（桌面多显示器）边界改判**工作区并集**而不是视口外接矩形：落点的身体两侧
  *  各留 margin 后仍须落在某块屏上。缝隙两侧都有屏 ⇒ 可自由走过去（允许骑缝）；外接矩形里的
@@ -34,26 +42,75 @@ export const planMove = (o: {
   sideAllow?: number;
   /** 可选：显示器工作区列表（与 cx/cy 同坐标系）。给了就按并集判定落点可达性 */
   areas?: Rect[];
+  /** 可选：垂直位移区间（px，正 = 向上，负 = 向下）；缺省 / 0 = 只走横线。
+   *  飞行类动作用它，让宠物斜着或上下穿屏。 */
+  minRise?: number;
+  maxRise?: number;
+  /** 可选：身体中心到身体上 / 下缘的距离（px）。有垂直位移时用于防止身体飞出屏幕；
+   *  缺省 0 = 只按中心点判定（旧行为）。 */
+  halfBodyTop?: number;
+  halfBodyBottom?: number;
+  /** 可选：显式目标中心（px，与 cx/cy 同坐标系）。两个都给时跳过随机距离与垂直区间，
+   *  直接走到该点（AI 看屏幕选的位置）；缺一个就仍按随机走。 */
+  targetX?: number;
+  targetY?: number;
 }): MovePlan | null => {
   const side = o.sideAllow ?? 0;
+  const targetX = o.targetX;
+  const targetY0 = o.targetY;
+  const explicit = targetX !== undefined && targetY0 !== undefined;
   const distance = randomBetween(o.minDist, o.maxDist);
-  const target = o.cx + o.dir * distance;
+  const target = explicit ? targetX : o.cx + o.dir * distance;
+  const rise = explicit ? 0 : randomBetween(o.minRise ?? 0, o.maxRise ?? 0);
+  const halfBodyTop = o.halfBodyTop ?? 0;
+  const halfBodyBottom = o.halfBodyBottom ?? 0;
+  // 垂直方向贴边时收短（而不是取消整次移动）：飞向上沿/下沿时能飞多少飞多少，
+  // 从屏幕角落点「飞行」也不至于原地干站着。横向仍沿用旧行为（出界即取消）。
+  let targetY = explicit ? targetY0 : o.cy - rise;
+  if (targetY !== o.cy) {
+    if (o.areas && o.areas.length > 0) {
+      // 终点本身在某块屏上（含跨屏缝飞到相邻屏）→ 用那块屏的上下界；终点落进空洞时退回
+      // 「目标 x、当前高度」所在的屏，把垂直位移收到屏内，而不是取消整次移动。
+      const area =
+        rectAtPoint(o.areas, target, targetY) ?? rectAtPoint(o.areas, target, o.cy) ?? rectAtPoint(o.areas, o.cx, o.cy);
+      if (area) {
+        targetY = Math.min(
+          Math.max(targetY, area.y + o.margin + halfBodyTop),
+          area.y + area.height - o.margin - halfBodyBottom,
+        );
+      }
+    } else {
+      targetY = Math.min(Math.max(targetY, o.margin + halfBodyTop), o.H - o.margin - halfBodyBottom);
+    }
+  }
   if (o.areas && o.areas.length > 0) {
     // 身体左右缘各外扩 margin 后都得落在某块屏上（可以分属不同屏 = 允许骑缝行走）
     const bodyHalf = o.halfW - side;
-    if (!rectAtPoint(o.areas, target - bodyHalf - o.margin, o.cy)) return null;
-    if (!rectAtPoint(o.areas, target + bodyHalf + o.margin, o.cy)) return null;
+    const xs = [target - bodyHalf - o.margin, target + bodyHalf + o.margin];
+    if (targetY !== o.cy) {
+      // 垂直移动时上下缘也要在屏内：四个角都查，避免飞进多屏之间的空洞
+      const ys = [targetY - halfBodyTop - o.margin, targetY + halfBodyBottom + o.margin];
+      for (const x of xs) for (const y of ys) if (!rectAtPoint(o.areas, x, y)) return null;
+    } else {
+      for (const x of xs) if (!rectAtPoint(o.areas, x, o.cy)) return null;
+    }
   } else {
     // margin 语义 =「身体到屏幕边缘的安全距」：盒中心可到 margin + halfW - side（身体左缘 = margin）
     const leftBound = o.margin + o.halfW - side;
     const rightBound = o.W - o.margin - o.halfW + side;
     if (target < leftBound || target > rightBound) return null;
+    if (targetY !== o.cy) {
+      if (targetY < o.margin + halfBodyTop) return null;
+      if (targetY > o.H - o.margin - halfBodyBottom) return null;
+    }
   }
   return {
     startRatio: o.cx / o.W,
     startYRatio: o.cy / o.H,
     targetRatio: target / o.W,
+    targetYRatio: targetY / o.H,
     totalRatio: Math.abs(target - o.cx) / o.W,
+    totalYRatio: (targetY - o.cy) / o.H,
   };
 };
 

@@ -44,6 +44,7 @@ PINYIN = {
     "螃蟹走路": "pangxie-zoulu",
     "原地漂浮踏步": "yuandi-piaofu-tabu",
     "原地左转奔跑": "yuandi-zuozhuan-benpao",
+    "飞来飞去": "feilai-feiqu",
     "悠闲哼歌": "youxian-hengga",
     "超大伸懒腰": "chaoda-shenlanyao",
     "原地敲击桌面互动": "yuandi-qiaoji-zhuomian-hudong",

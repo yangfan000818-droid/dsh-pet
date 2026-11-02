@@ -1192,6 +1192,8 @@ export function createPetHost(deps: PetHostDeps): PetHost {
     //     "文字类动画点播前强制朝左"那条镜像修正（调用方明确要哪个朝向就给哪个）；
     //   rate **可选**（0.5–3）：给了就写进叶子，渲染端播这一段时设 video.playbackRate，
     //     这一段结束或被打断就恢复常速；没给时行为一字不变（叶子里不写字段）。
+    //   target **可选**（`{ x, y }`，宠物中心的归一化坐标）：只跟 name 形态的移动动作一起用，
+    //     渲染端按这个终点走/飞（不再随机距离），位移与素材的 lead/tail 仍由渲染端自己算。
     if (rest === 'anim') {
       if (method !== 'POST') return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
       let parsed: unknown;
@@ -1210,6 +1212,7 @@ export function createPetHost(deps: PetHostDeps): PetHost {
           url: o.url,
           facing: o.facing,
           rate: o.rate,
+          target: o.target,
         });
         if (!d.ok) return { kind: 'json', status: 200, obj: { ok: false, reason: d.reason, message: d.message } };
         // 占用门禁：持锁者自己的点播照放行（那是它的演出），别人一律拒
@@ -1227,6 +1230,7 @@ export function createPetHost(deps: PetHostDeps): PetHost {
           playbackId: record.playbackId,
           ...(d.facing === undefined ? {} : { facing: d.facing }),
           ...(d.rate === undefined ? {} : { rate: d.rate }),
+          ...(d.target === undefined ? {} : { target: d.target }),
         });
         return { kind: 'json', status: 200, obj: { ok: true, playbackId: record.playbackId } };
       } catch (e) {

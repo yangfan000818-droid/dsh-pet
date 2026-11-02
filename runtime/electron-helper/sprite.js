@@ -855,7 +855,9 @@ class PetSprite {
 
   // ---- 漫游（rAF 驱动，动画首尾各 leadSec/tailSec 秒原地不动；几何在 shared/planMove） ----
   // preferredName 传入时固定使用该动画（右键菜单点播移动动画），否则与随机链一致随机选
-  tryMove(preferredName, playbackId, rate) {
+  // target 传入时（POST /anim 的可选终点，归一化坐标）直接走到该点：方向 / 落点都由它决定，
+  // 不再随机距离与垂直区间；边界仍走 planMove 的同一套检查。
+  tryMove(preferredName, playbackId, rate, target) {
     if (this.moveRef !== null || this.pendingMove || this.throwRef !== null) return true;
     const moves = this.animations.moves;
     const actions = moves.actions;
@@ -865,21 +867,30 @@ class PetSprite {
       : actions[Math.floor(Math.random() * actions.length)];
     if (!chosen) return false;
     const mp = Object.assign({}, moves.default, chosen.params || {});
-    // 朝向 → 走路方向：**只看当前 facing**（与浏览器 pet.ts 的 tryMove 同一条）。原式的 XOR 是用来
-    // 补"turn 播完 setFacing 异步、紧随的随机链还读到旧 facing"，双端都改成立即同步之后它反而把方向
-    // 多翻一次：turn 播完朝右，这里算出 dir=-1，于是镜像朝右、人往左走。故删掉。
-    const dir = this.facing === 'right' ? 1 : -1;
     const W = VIEW.w;
     const H = VIEW.h;
     const distScale = this.size / S.PET_REF_WIDTH;
     const cx = this.currentCenterX();
     const cy = this.currentCenterY();
+    // 显式终点：方向由目标点决定；朝向已在 onMenuAction 里按目标翻好（显式 facing 除外）
+    const hasTarget = target !== null && target !== undefined;
+    // 朝向 → 走路方向：**只看当前 facing**（与浏览器 pet.ts 的 tryMove 同一条）。原式的 XOR 是用来
+    // 补"turn 播完 setFacing 异步、紧随的随机链还读到旧 facing"，双端都改成立即同步之后它反而把方向
+    // 多翻一次：turn 播完朝右，这里算出 dir=-1，于是镜像朝右、人往左走。故删掉。
+    const dir = hasTarget ? (target.x * W >= cx ? 1 : -1) : this.facing === 'right' ? 1 : -1;
     // 落点按显示器判定：默认走**并集**——能骑缝跨屏走，但走不进外接矩形里的空洞。
     // confineToScreen（设置页「锁定在当前屏幕」）开启时改成只按**宠物现在所在那块屏**判定：
     // 屏缝与空洞一样当墙，越出当前屏的那一步直接取消（planMove 返回 null ⇒ 本次移动不发车）。
     // 与抛掷锁定的差别：抛掷是逐帧物理边界（撞到屏缝会弹回来），漫游是一次性落点规划、没有反弹语义。
     // 宠物被拖到屏外（落在空洞里）时 resolveRect 取最近那块屏，所以锁定态下依然走得动。
     const wanderArea = this.confineToScreen ? S.resolveRect(AREAS, cx, cy) : null;
+    // 垂直位移（飞行）：params.minRise/maxRise 是「正 = 向上」的像素区间，与 minDist 一样按
+    // 实际尺寸/基准宽等比缩放。halfBody* 用命中盒算身体真实上下缘，避免飞进屏幕边缘外。
+    const riseScale = this.size / S.PET_REF_WIDTH;
+    const minRise = Number.isFinite(mp.minRise) ? mp.minRise * riseScale : 0;
+    const maxRise = Number.isFinite(mp.maxRise) ? mp.maxRise * riseScale : 0;
+    const halfBodyTop = Math.max(0, this.halfH - this.hitRect.y);
+    const halfBodyBottom = Math.max(0, this.hitRect.y + this.hitRect.h - this.halfH);
     const plan = S.planMove({
       cx,
       cy,
@@ -892,13 +903,21 @@ class PetSprite {
       halfW: this.halfW,
       sideAllow: this.sideAllow,
       areas: wanderArea ? [wanderArea] : AREAS,
+      minRise,
+      maxRise,
+      halfBodyTop,
+      halfBodyBottom,
+      targetX: hasTarget ? target.x * W : undefined,
+      targetY: hasTarget ? target.y * H : undefined,
     });
     if (!plan) return false;
     this.pendingMove = { ...plan, dir, leadSec: mp.leadSec, tailSec: mp.tailSec };
     this.anim = chosen.name;
     this.once = true;
-    // rate（POST /anim 点播移动动画时给的倍速）跟着换源一起走：/anim 的 name 形态两条路都要生效
-    this.switchTo(chosen.name, true, playbackId, undefined, rate);
+    // rate（POST /anim 点播移动动画时给的倍速）跟着换源一起走：/anim 的 name 形态两条路都要生效；
+    // 点播没给时用动作自己的 params.rate（飞行类动作靠它快进，别让 10 秒素材拖慢整段）
+    const moveRate = Number.isFinite(mp.rate) && mp.rate > 0 ? mp.rate : undefined;
+    this.switchTo(chosen.name, true, playbackId, undefined, rate ?? moveRate);
     return chosen.name;
   }
 
@@ -906,7 +925,7 @@ class PetSprite {
     const pm = this.pendingMove;
     if (!pm || this.moveRef !== null) return;
     this.pendingMove = null;
-    const { startRatio, startYRatio, targetRatio, dir, totalRatio, leadSec, tailSec } = pm;
+    const { startRatio, startYRatio, targetRatio, targetYRatio, dir, totalRatio, totalYRatio, leadSec, tailSec } = pm;
     const duration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 10.09;
     const travelWindow = Math.max(0.1, duration - leadSec - tailSec);
     const token = ++this.moveToken;
@@ -916,16 +935,25 @@ class PetSprite {
       if (this.moveToken !== token) return;
       const t = el.currentTime || 0;
       let ratioX;
-      if (t <= leadSec) ratioX = startRatio;
-      else if (t >= duration - tailSec) ratioX = targetRatio;
-      else ratioX = startRatio + dir * totalRatio * ((t - leadSec) / travelWindow);
+      let ratioY;
+      if (t <= leadSec) {
+        ratioX = startRatio;
+        ratioY = startYRatio;
+      } else if (t >= duration - tailSec) {
+        ratioX = targetRatio;
+        ratioY = targetYRatio;
+      } else {
+        const p = (t - leadSec) / travelWindow;
+        ratioX = startRatio + dir * totalRatio * p;
+        ratioY = startYRatio + totalYRatio * p; // 飞行：y 也按同一时间轴插值；纯横移时 totalYRatio = 0
+      }
       // 移动的是窗口（宠物包围盒跟随），sprite 在本窗口内不动
-      this.sendBounds(ratioX * W - this.halfW, startYRatio * H - this.halfH);
+      this.sendBounds(ratioX * W - this.halfW, ratioY * H - this.halfH);
       if (t < duration - tailSec) {
         this.moveRef = requestAnimationFrame(step);
       } else {
         this.moveRef = null;
-        this.customPos = { rx: targetRatio, ry: startYRatio };
+        this.customPos = { rx: targetRatio, ry: targetYRatio };
       }
     };
     this.moveRef = requestAnimationFrame(step);
@@ -1782,9 +1810,19 @@ class PetSprite {
       this.facing = 'left';
     }
     // 点播移动动画：走真实移动（与随机游走同一套：边界检查 / 随机距离 / leadSec·tailSec / dir），
-    // 仅"选哪个动画"由菜单决定；挪不动（false）退化纯播放
+    // 仅"选哪个动画"由菜单决定；挪不动（false）退化纯播放。
+    // `target`（POST /anim 的可选终点）给了就走到指定位置，方向由目标点决定；没给时仍按朝向随机走。
     if (this.animations.moves.actions.some((a) => a.name === leaf.anim)) {
-      const moved = this.tryMove(leaf.anim, playbackId, rate);
+      const target =
+        leaf.target &&
+        typeof leaf.target === 'object' &&
+        Number.isFinite(leaf.target.x) &&
+        Number.isFinite(leaf.target.y)
+          ? { x: leaf.target.x, y: leaf.target.y }
+          : null;
+      // 显式目标时朝向跟着目标方向走（除非调用方显式指定了 facing）：走路素材左右不对称
+      if (target && !keepFacing) this.facing = target.x * VIEW.w >= this.currentCenterX() ? 'right' : 'left';
+      const moved = this.tryMove(leaf.anim, playbackId, rate, target);
       if (moved === false) this.playOnce(leaf.anim, playbackId, undefined, rate);
       // moved === true = 已有移动/抛掷在进行中（tryMove 提前返回，**根本没换源**）：
       // 本段点播不会真的播起来 → 如实回 failed/busy，而不是让调用方干等到 timeout

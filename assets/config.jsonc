@@ -222,13 +222,18 @@
     // 移动动画池：default 是每个动作都用的默认参数；actions 里每项可覆盖部分参数，
     // 未写的字段取 default。minDist/maxDist=单次行进距离(px)——以「基准宠物宽 462px」为准，
     //   运行时按 实际size/462 等比缩放（小宠物挪小步、大宠物挪大步，与人物大小匹配）；
+    // minRise/maxRise=垂直位移区间(px，正=向上、负=向下，同样按尺寸缩放)——不写 = 只走横线；
+    //   写了就是「飞行」：水平方向仍由朝向决定，垂直方向随机，贴屏边时自动收短；
+    // rate=播放倍速（0.5–3，不写=1）——飞行类动作靠快进让素材变成一次利落的冲刺；
     // margin=贴边安全距(px，不随缩放)、leadSec/tailSec=动画首尾各多少秒原地不动。
     "moves": {
       "default": { "minDist": 60, "maxDist": 240, "margin": 20, "leadSec": 2, "tailSec": 2 },
       "actions": [
         { "name": "螃蟹走路" },
         { "name": "原地漂浮踏步", "params": { "minDist": 40, "maxDist": 120 } },
-        { "name": "原地左转奔跑", "params": { "minDist": 120, "maxDist": 320, "leadSec": 1.75, "tailSec": 4.8 } }
+        { "name": "原地左转奔跑", "params": { "minDist": 120, "maxDist": 320, "leadSec": 1.75, "tailSec": 4.8 } },
+        // 飞行滑行：横向 400–900px、上下 -220–+280px，1.3 倍速让 5 秒素材变成一次利落的冲刺
+        { "name": "飞来飞去", "params": { "minDist": 400, "maxDist": 900, "minRise": -220, "maxRise": 280, "leadSec": 0.8, "tailSec": 1.2, "rate": 1.3 } }
       ]
     },
     // 随机动作：分类池。weight 为该分类出现权重；noMirror: true 表示“带文字、镜像会颠倒，

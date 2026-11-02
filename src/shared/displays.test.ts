@@ -370,6 +370,136 @@ describe('anchorPixel / planMove —— 角落与漫游不进空洞', () => {
     assert.ok(planMove({ ...base, dir: 1 }));
     assert.equal(planMove({ ...base, cx: 100, dir: -1 }), null);
   });
+
+  test('不写 rise 时 y 不动（旧行为逐位不变）', () => {
+    const plan = planMove({
+      cx: 500,
+      cy: 500,
+      W: 1920,
+      H: 1080,
+      dir: 1,
+      minDist: 300,
+      maxDist: 300,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+    });
+    assert.ok(plan);
+    assert.equal(plan.targetYRatio, plan.startYRatio);
+    assert.equal(plan.totalYRatio, 0);
+  });
+
+  test('飞行：y 按 rise 偏移（正 = 向上），比例与起点同坐标系', () => {
+    const plan = planMove({
+      cx: 500,
+      cy: 500,
+      W: 1920,
+      H: 1080,
+      dir: 1,
+      minDist: 300,
+      maxDist: 300,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+      minRise: 200,
+      maxRise: 200,
+      halfBodyTop: 72,
+      halfBodyBottom: 134,
+    });
+    assert.ok(plan);
+    assert.ok(Math.abs(plan.targetYRatio * 1080 - 300) < 1e-9, '向上 200px');
+    assert.ok(Math.abs(plan.totalYRatio * 1080 + 200) < 1e-9, 'y 位移为负（向上）');
+  });
+
+  test('飞行贴边时收短：从屏幕顶沿继续向上飞只飞到安全线', () => {
+    const plan = planMove({
+      cx: 500,
+      cy: 50,
+      W: 1920,
+      H: 1080,
+      dir: 1,
+      minDist: 100,
+      maxDist: 100,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+      minRise: 500,
+      maxRise: 500,
+      halfBodyTop: 72,
+      halfBodyBottom: 134,
+    });
+    assert.ok(plan, '不该因为上方没空间就取消整次移动');
+    assert.ok(Math.abs(plan.targetYRatio * 1080 - (24 + 72)) < 1e-9, '收短到身体上缘贴安全线');
+  });
+
+  test('飞行跨屏：上下两块屏的屏缝允许穿过，身体四角都须落在屏上', () => {
+    const top: Rect = { x: 0, y: 0, width: 1920, height: 1080 };
+    const bottom: Rect = { x: 0, y: 1080, width: 1920, height: 1080 };
+    const plan = planMove({
+      cx: 800,
+      cy: 900,
+      W: 1920,
+      H: 2160,
+      dir: 1,
+      minDist: 100,
+      maxDist: 100,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+      areas: [top, bottom],
+      minRise: -400,
+      maxRise: -400,
+      halfBodyTop: 72,
+      halfBodyBottom: 134,
+    });
+    assert.ok(plan, '向下跨屏缝应可达');
+    assert.ok(Math.abs(plan.targetYRatio * 2160 - 1300) < 1e-9);
+  });
+
+  test('显式目标：x/y 都走到给定点，不再随机距离与垂直区间', () => {
+    const plan = planMove({
+      cx: 500,
+      cy: 500,
+      W: 1920,
+      H: 1080,
+      dir: 1,
+      minDist: 10,
+      maxDist: 10,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+      targetX: 1400,
+      targetY: 300,
+      halfBodyTop: 72,
+      halfBodyBottom: 134,
+    });
+    assert.ok(plan);
+    assert.ok(Math.abs(plan.targetRatio * 1920 - 1400) < 1e-9);
+    assert.ok(Math.abs(plan.targetYRatio * 1080 - 300) < 1e-9);
+    assert.ok(Math.abs(plan.totalRatio * 1920 - 900) < 1e-9);
+    assert.ok(Math.abs(plan.totalYRatio * 1080 + 200) < 1e-9);
+  });
+
+  test('显式目标贴边时 y 收短；横向出界仍拒（与随机走同一口径）', () => {
+    const common = {
+      cx: 500,
+      cy: 500,
+      W: 1920,
+      H: 1080,
+      dir: 1 as const,
+      minDist: 10,
+      maxDist: 10,
+      margin: 24,
+      halfW: SIZE / 2,
+      sideAllow: SIDE_ALLOW,
+      halfBodyTop: 72,
+      halfBodyBottom: 134,
+    };
+    const top = planMove({ ...common, targetX: 800, targetY: 10 });
+    assert.ok(top);
+    assert.ok(Math.abs(top.targetYRatio * 1080 - (24 + 72)) < 1e-9);
+    assert.equal(planMove({ ...common, targetX: 1900, targetY: 500 }), null);
+  });
 });
 
 describe('throwStepRegion —— confineToScreen：锁定屏后屏缝也当墙', () => {

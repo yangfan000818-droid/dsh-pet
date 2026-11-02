@@ -1,5 +1,9 @@
 import { findPetInstance, readAllConfig } from '../../host/config';
 import { isUnsupportedImageError } from '../../standalone/ai-provider';
+import { screenUnion } from '../battle-dash';
+import { moveTargetOf, parseMoveAnswer } from '../move-target';
+import type { MoveKind } from '../move-target';
+import type { Rect } from '../../shared/types';
 import type { FeatureContext } from './context';
 import { lazyFns } from './context';
 import { LINE_RULE } from './speech';
@@ -18,11 +22,13 @@ interface Meme {
 /** 看屏幕 */
 export interface Screen {
   lookAtScreen(manual: boolean): Promise<{ ok: boolean; text?: string; image?: string; reason?: string }>;
+  /** AI 看屏幕挑个位置并飞/走过去。AI 不可用、看不了、没位置信息或解析失败 → false（调用方自行兜底） */
+  moveWithAi(kind: MoveKind): Promise<boolean>;
 }
 
 export function createScreen(ctx: FeatureContext): Screen {
   const { collect, petId, petRequest, say, systemPrompt } = lazyFns(ctx);
-  const { deps, log, electron, ai, diary } = ctx;
+  const { deps, log, electron, ai, diary, homePet } = ctx;
   /** 看屏幕配图用的表情包池：与碎碎念同一个开关（whisperImageEnabled）、同一个池（插件的 GET /memes）；没开 / 取不到 → 空 */
   async function memePool(): Promise<Meme[]> {
     try {
@@ -95,6 +101,119 @@ export function createScreen(ctx: FeatureContext): Screen {
     }
   }
 
+  /** 读当前宠物的配置（固定 / 锁定屏幕）；读不到就当没有这些开关 */
+  function petConf(): Record<string, unknown> | null {
+    try {
+      return findPetInstance(readAllConfig(deps.configPaths), petId())?.conf ?? null;
+    } catch (error) {
+      log(`读配置失败（按未固定处理）：${errorText(error)}`);
+      return null;
+    }
+  }
+
+  /**
+   * 让模型按截图挑九宫格位置。菜单点播时模式固定（飞/走）；看屏幕后自动移动用 auto，
+   * 让模型自己说「飞N / 走N」，没说方式时按距离决定。
+   */
+  function movePrompt(kind: MoveKind | 'auto'): string {
+    const grid = '九宫格编号：1=左上，2=上，3=右上，4=左，5=中间，6=右，7=左下，8=下，9=右下。';
+    const intro = '这是主人此刻的电脑屏幕截图（画面里那个小女仆就是你自己，别管她）。';
+    if (kind === 'fly') {
+      return `${intro}看看主人在做什么，挑一个你想飞过去看看的位置。${grid}只回答一个数字（1–9），不要回答别的字。`;
+    }
+    if (kind === 'walk') {
+      return `${intro}看看主人在做什么，挑一个你想走过去看看的位置。${grid}只回答一个数字（1–9），不要回答别的字。`;
+    }
+    return `${intro}看看主人在做什么，挑一个你感兴趣、想过去看看的位置，并决定飞过去还是走过去（远就飞，近就走）。${grid}只回答两个字：飞N 或 走N（N 是 1–9），不要回答别的字。`;
+  }
+
+  /**
+   * 用一张已经截好的屏幕图让 AI 选位置，并真的发 /anim（带 target）。
+   * 独立于看屏幕的吐槽调用：同一个 prompt 里同时要台词和坐标会让小模型把两件事说串。
+   * @param respectFixed 宠物固定时不动（看屏幕后自动移动用；菜单点播是主人明确要它走，照走）
+   */
+  async function askMoveTarget(
+    image: string,
+    area: Rect,
+    kind: MoveKind | 'auto',
+    respectFixed: boolean,
+  ): Promise<boolean> {
+    const box = homePet.box();
+    if (!box) return false;
+    const conf = petConf();
+    if (respectFixed && conf?.fixedEnabled === true) return false;
+    // 锁在当前屏幕时把九宫格落到宠物自己那块屏上：看屏幕看的是鼠标那块屏，
+    // 但 /anim target 会被渲染端的锁定挡在屏缝外，落到别的屏上只会原地播动作。
+    const current = { x: box.left + box.size / 2, y: box.top + (box.size * 9) / 32 };
+    const moveArea = conf?.confineToScreen === true ? electron.screen.getDisplayNearestPoint(current).workArea : area;
+    let answer: string;
+    try {
+      answer = await collect(
+        ai.streamVision({
+          system: '你只按用户要求回答，不加解释。',
+          prompt: movePrompt(kind),
+          image,
+        }),
+      );
+    } catch (error) {
+      log(`AI 选位置失败：${errorText(error)}`);
+      return false;
+    }
+    const pick = parseMoveAnswer(answer, kind);
+    if (!pick) {
+      log(`AI 选位置没听懂（回答不是九宫格编号）`);
+      return false;
+    }
+    const union = screenUnion(electron.screen);
+    if (!union) return false;
+    const target = moveTargetOf({
+      cell: pick.cell,
+      kind: pick.kind,
+      area: moveArea,
+      union,
+      size: box.size,
+      current,
+    });
+    if (!target) return false;
+    const name = target.kind === 'fly' ? '飞来飞去' : '螃蟹走路';
+    try {
+      const result = await petRequest('POST', '/anim', { name, target: { x: target.x, y: target.y } });
+      if (result.ok !== true) {
+        log(`AI 选好位置但点播失败（${name}）：${JSON.stringify(result)}`);
+        return false;
+      }
+    } catch (error) {
+      log(`AI 选好位置但点播失败（${name}）：${errorText(error)}`);
+      return false;
+    }
+    return true;
+  }
+
+  /** 菜单点播「飞来飞去 / 走两步」：AI 看屏幕并走过去；没接 AI / 看不了 → false，调用方退回随机移动 */
+  async function moveWithAi(kind: MoveKind): Promise<boolean> {
+    if (!ai.isReady() || !ai.canSeeScreen()) return false;
+    // 菜单点播不主动弹系统授权框：没授权就退回原来的随机移动
+    if (electron.systemPreferences.getMediaAccessStatus('screen') !== 'granted') return false;
+    const box = homePet.box();
+    if (!box) return false;
+    // 锁在当前屏幕时看宠物所在那块屏，否则看鼠标所在的那块（与「看看我在干嘛」同一块）
+    const confine = petConf()?.confineToScreen === true;
+    const point = confine
+      ? { x: box.left + box.size / 2, y: box.top + (box.size * 9) / 32 }
+      : electron.screen.getCursorScreenPoint();
+    const display = electron.screen.getDisplayNearestPoint(point);
+    const sources = await electron.desktopCapturer
+      .getSources({ types: ['screen'], thumbnailSize: { width: 1280, height: 1280 } })
+      .catch((error: unknown) => {
+        log(`截图失败（AI 选位置）：${errorText(error)}`);
+        return [];
+      });
+    const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
+    if (!source || source.thumbnail.isEmpty()) return false;
+    const image = 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(70).toString('base64');
+    return askMoveTarget(image, display.workArea, kind, false);
+  }
+
   async function lookAtScreen(
     manual: boolean,
   ): Promise<{ ok: boolean; text?: string; image?: string; reason?: string }> {
@@ -157,6 +276,10 @@ export function createScreen(ctx: FeatureContext): Screen {
         diary.note(now, 'screen', `看了一眼主人的屏幕，说：「${text}」`);
         ctx.state.lastScreenDiaryAt = now;
       }
+      // 看完屏幕顺手按内容挪个位置：固定宠物 / 演出中不动；选位置失败不影响这次看屏幕
+      if (!ctx.state.battle && !ctx.state.liveBattle && !ctx.state.actionPanel) {
+        await askMoveTarget(image, display.workArea, 'auto', true);
+      }
       return { ok: true, text, ...(meme ? { image: meme.name } : {}) };
     } catch (error) {
       log(`看屏幕失败：${errorText(error)}`);
@@ -169,5 +292,5 @@ export function createScreen(ctx: FeatureContext): Screen {
       ctx.state.lastScreenAt = Date.now();
     }
   }
-  return { lookAtScreen };
+  return { lookAtScreen, moveWithAi };
 }

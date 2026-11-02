@@ -222,7 +222,16 @@ function applyAnimLeaf(petId, leaf) {
     if (explicitFacing) s.facing = hit.facing; // 必须在换源前：switchTo 里按它贴 scaleX(-1)
     if (hit.url !== undefined) s.playUrlOnce(hit.url, hit.playbackId, hit.rate);
     else if (hit.name !== undefined)
-      s.onMenuAction({ label: hit.name, anim: hit.name, playbackId: hit.playbackId, rate: hit.rate }, explicitFacing);
+      s.onMenuAction(
+        {
+          label: hit.name,
+          anim: hit.name,
+          playbackId: hit.playbackId,
+          rate: hit.rate,
+          ...(hit.target ? { target: hit.target } : {}),
+        },
+        explicitFacing,
+      );
   }
 }
 

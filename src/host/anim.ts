@@ -36,9 +36,18 @@ export const ANIM_RATE_MAX = 3;
 
 /** 决策结论：通过则给出最终要写进 S 的内容（`name` 与 `url` **恰好一个**），否则给出显式原因。
  *  `facing` **可选**：undefined = 调用方没指定，渲染端**不动朝向**（不是"回落 left"）。
- *  `rate` **可选**：undefined = 常速；给了就是渲染端这一段要设的 `video.playbackRate`。 */
+ *  `rate` **可选**：undefined = 常速；给了就是渲染端这一段要设的 `video.playbackRate`。
+ *  `target` **可选**：移动动画的显式终点（宠物中心的归一化坐标），给了就走到那里而不是随机距离。 */
 export type AnimDecision =
-  | { ok: true; petId: string; name?: string; url?: string; facing?: PetFacing; rate?: number }
+  | {
+      ok: true;
+      petId: string;
+      name?: string;
+      url?: string;
+      facing?: PetFacing;
+      rate?: number;
+      target?: { x: number; y: number };
+    }
   | { ok: false; reason: AnimFailure; message: string };
 
 /** 字符串数组收窄（配置里的池子；非数组/空串 → 空数组） */
@@ -48,6 +57,17 @@ function strings(v: unknown): string[] {
 
 /** 朝向收窄：只认两个字面量（大小写、空白、非字符串一律不算），不认识返回 `null` */
 const petFacing = (v: unknown): PetFacing | null => (v === 'left' || v === 'right' ? v : null);
+
+/** 移动动作池（`animations.moves.actions[].name`），也是唯一允许带 `target` 的一类动画 */
+function moveActionNames(animations: unknown): string[] {
+  const a = (animations && typeof animations === 'object' ? animations : {}) as Record<string, unknown>;
+  const moves = (a.moves && typeof a.moves === 'object' ? a.moves : {}) as Record<string, unknown>;
+  return Array.isArray(moves.actions)
+    ? moves.actions
+        .map((m) => (m && typeof m === 'object' ? (m as { name?: unknown }).name : undefined))
+        .filter((x): x is string => typeof x === 'string' && x !== '')
+    : [];
+}
 
 /**
  * 该条目的 animations 配置 → 可点播的动画名（去重，保持首次出现顺序）。
@@ -67,14 +87,7 @@ export function animationNames(animations: unknown): string[] {
   push(strings(a.clicks));
 
   // 移动：actions 是 { name, ... } 对象数组，只取 name
-  const moves = (a.moves && typeof a.moves === 'object' ? a.moves : {}) as Record<string, unknown>;
-  push(
-    Array.isArray(moves.actions)
-      ? moves.actions
-          .map((m) => (m && typeof m === 'object' ? (m as { name?: unknown }).name : undefined))
-          .filter((x): x is string => typeof x === 'string' && x !== '')
-      : [],
-  );
+  push(moveActionNames(a));
 
   // config 随机动作分类：每个分类一个 actions 池
   if (Array.isArray(a.categories)) {
@@ -138,6 +151,7 @@ export function normalizeHttpUrl(v: unknown): string | null {
  * @param url 外部给的素材地址（未规范化）
  * @param facing 外部给的朝向（**可选**：没给 → 渲染端不动朝向）
  * @param rate 外部给的倍速（**可选**：没给 → 常速）
+ * @param target 外部给的移动终点（**可选**：{x,y} 归一化坐标；只允许移动动作 + name 形态）
  */
 export function decideAnim(args: {
   cfg: Record<string, Record<string, unknown>>;
@@ -146,6 +160,7 @@ export function decideAnim(args: {
   url: unknown;
   facing?: unknown;
   rate?: unknown;
+  target?: unknown;
 }): AnimDecision {
   const { cfg, requested } = args;
 
@@ -153,6 +168,23 @@ export function decideAnim(args: {
   const rawUrl = typeof args.url === 'string' ? args.url.trim() : '';
   if (name && rawUrl) return { ok: false, reason: 'bad-request', message: 'name 与 url 只能给一个' };
   if (!name && !rawUrl) return { ok: false, reason: 'bad-request', message: 'name 或 url 必须给一个' };
+
+  // target **可选**：必须同时有 x/y 两个有限数字，越界夹到 0~1（与 /position 同一口径）。
+  // 只跟 name 形态的移动动作一起用——url 是裸地址，渲染端不走菜单语义；非移动动作也不会挪窗口。
+  let target: { x: number; y: number } | undefined;
+  if (args.target !== undefined && args.target !== null) {
+    const t =
+      typeof args.target === 'object' && !Array.isArray(args.target)
+        ? (args.target as { x?: unknown; y?: unknown })
+        : null;
+    if (!t || typeof t.x !== 'number' || !Number.isFinite(t.x) || typeof t.y !== 'number' || !Number.isFinite(t.y)) {
+      return { ok: false, reason: 'bad-request', message: 'target 必须是 { x, y } 两个有限数字（归一化坐标）' };
+    }
+    target = { x: Math.min(1, Math.max(0, t.x)), y: Math.min(1, Math.max(0, t.y)) };
+  }
+  if (rawUrl && target) {
+    return { ok: false, reason: 'bad-request', message: 'target 只能跟 name 形态的移动动画一起用' };
+  }
 
   // facing **可选**：没给（undefined / null——调用方复用 body 模板时两种都常见）→ **不动朝向**，
   // 保持宠物当前朝向，而不是"回落 left"。给了就必须合法：非法值不静默忽略（与 /position 的 mode
@@ -206,6 +238,9 @@ export function decideAnim(args: {
   if (!allowed.includes(name)) {
     return { ok: false, reason: 'unknown-animation', message: '没有这个动画：' + name };
   }
+  if (target && !moveActionNames(found.conf.animations).includes(name)) {
+    return { ok: false, reason: 'bad-request', message: 'target 只能用在移动动作上：' + name };
+  }
 
-  return { ok: true, petId, name, facing, rate };
+  return { ok: true, petId, name, facing, rate, target };
 }

@@ -184,6 +184,23 @@ describe('readAnim —— 点播动画叶子（名字或地址 + 回执编号）
       assert.equal(hit?.name, 'A', '脏 rate 不该让整条指令作废（照样播，只是常速）');
     }
   });
+
+  test('target（移动终点）：合法值取到并夹到 0~1；老 host 没有 → undefined', () => {
+    assert.deepEqual(readAnim({ counter: 1, data: { name: '螃蟹走路', target: { x: 0.25, y: 0.75 } } })?.target, {
+      x: 0.25,
+      y: 0.75,
+    });
+    assert.deepEqual(readAnim({ counter: 1, data: { name: 'A', target: { x: -1, y: 2 } } })?.target, { x: 0, y: 1 });
+    assert.equal(readAnim({ counter: 1, data: { name: 'A' } })?.target, undefined);
+  });
+
+  test('target 形状非法 → 归一成 undefined，且不影响这条指令本身', () => {
+    for (const bad of [42, 'x', [], {}, { x: 0.5 }, { y: 0.5 }, { x: '0.5', y: 0.5 }, { x: NaN, y: 0.5 }]) {
+      const hit = readAnim({ counter: 1, data: { name: 'A', target: bad } });
+      assert.equal(hit?.target, undefined, JSON.stringify(bad) + ' 不应被当成终点');
+      assert.equal(hit?.name, 'A', '脏 target 不该让整条指令作废（照样播，只是随机走）');
+    }
+  });
 });
 
 describe('readSay —— 说话叶子（弹气泡 / 清空 两种形态）', () => {

@@ -195,16 +195,40 @@ export type PetFacing = 'left' | 'right';
  * 与"要求 left"在形状上就是可区分的）。两种形态都适用。
  * `rate`：调用方**显式指定**的倍速（可选，宿主已卡在 0.5–3）。`undefined` = 常速；消费端播这一段
  * 时设 `video.playbackRate`，这一段结束或被打断就恢复 1。两种形态都适用，形状非法当"没给"。
+ * `target`：移动动作的显式终点（可选，`{x,y}` 归一化坐标）。`undefined` = 随机距离；
+ * 消费端走到这个点而不是自己掷骰。形状非法当"没给"。
  */
-export function readAnim(
-  leaf: StateLeaf,
-): { name?: string; url?: string; playbackId?: string; facing?: PetFacing; rate?: number } | null {
+export function readAnim(leaf: StateLeaf): {
+  name?: string;
+  url?: string;
+  playbackId?: string;
+  facing?: PetFacing;
+  rate?: number;
+  target?: { x: number; y: number };
+} | null {
   if (!leaf.data || typeof leaf.data !== 'object') return null;
-  const d = leaf.data as { name?: unknown; url?: unknown; playbackId?: unknown; facing?: unknown; rate?: unknown };
+  const d = leaf.data as {
+    name?: unknown;
+    url?: unknown;
+    playbackId?: unknown;
+    facing?: unknown;
+    rate?: unknown;
+    target?: unknown;
+  };
   const name = typeof d.name === 'string' && d.name ? d.name : undefined;
   const url = typeof d.url === 'string' && d.url ? d.url : undefined;
   // 两个都缺席 = 形状非法（宿主写端保证恰好一个，这里不替它猜）
   if (name === undefined && url === undefined) return null;
+  // 目标点：只认两个有限数字，越界夹到 0~1（与写端同一口径；老 host 没有这个字段）
+  const rawTarget = d.target && typeof d.target === 'object' ? (d.target as { x?: unknown; y?: unknown }) : null;
+  const target =
+    rawTarget &&
+    typeof rawTarget.x === 'number' &&
+    Number.isFinite(rawTarget.x) &&
+    typeof rawTarget.y === 'number' &&
+    Number.isFinite(rawTarget.y)
+      ? { x: Math.min(1, Math.max(0, rawTarget.x)), y: Math.min(1, Math.max(0, rawTarget.y)) }
+      : undefined;
   return {
     name,
     url,
@@ -213,6 +237,7 @@ export function readAnim(
     facing: d.facing === 'left' || d.facing === 'right' ? d.facing : undefined,
     // 倍速：只认正的有限数，其余（含缺省、老 host、脏值）一律 undefined = 常速（写端已校验，这里只是防御）
     rate: typeof d.rate === 'number' && Number.isFinite(d.rate) && d.rate > 0 ? d.rate : undefined,
+    ...(target ? { target } : {}),
   };
 }
 

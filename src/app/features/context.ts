@@ -449,6 +449,7 @@ export interface FeatureFunctions {
   speak(instruction: string, fallback: string, options?: SayOptions): Promise<void>;
   sayLine(text: string, options?: SayOptions): Promise<void>;
   lookAtScreen(manual: boolean): Promise<{ ok: boolean; text?: string; image?: string; reason?: string }>;
+  moveWithAi(kind: 'fly' | 'walk'): Promise<boolean>;
   activityContext(): string;
   tick(): Promise<void>;
   schedule(): void;

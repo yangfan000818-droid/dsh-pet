@@ -1,7 +1,16 @@
 import { UNSUPPORTED_IMAGE_MESSAGE } from '../standalone/ai-provider.ts';
 import { diaryDate } from './diary.ts';
 import type { DiaryDay } from './diary.ts';
-import { withFeatures, env, last, memeAsks, visionPrompts, until, TEST_APP_CONFIG } from './features-testkit.ts';
+import {
+  withFeatures,
+  env,
+  last,
+  memeAsks,
+  visionPrompts,
+  until,
+  TEST_APP_CONFIG,
+  emitPetBounds,
+} from './features-testkit.ts';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -77,6 +86,56 @@ test('看屏幕：表情包池为空就不配图', async () => {
     assert.equal('image' in (last(bodies) ?? {}), false);
     assert.doesNotMatch(last(visionPrompts) ?? '', /表情包/);
   });
+});
+
+test('右键菜单：飞来飞去、走两步排在看看我在干嘛和宠物日记下面，点了就点播对应动作', async () => {
+  const clicks: string[] = [];
+  await withFeatures({ clicks }, async (_features, _said, _bodies, _home, { menus, anims }) => {
+    await until(() => menus.length > 0);
+    assert.deepEqual((last(menus) ?? []).slice(0, 4), ['看看我在干嘛', '宠物日记', '飞来飞去', '走两步']);
+    clicks.push('飞来飞去', '走两步');
+    await until(() => anims.length >= 2);
+    assert.deepEqual(
+      anims.filter((anim) => anim.name !== undefined).map((anim) => anim.name),
+      ['飞来飞去', '螃蟹走路'],
+    );
+  });
+});
+
+test('看屏幕：接了 AI 就按看到的内容飞/走到九宫格选的位置', async () => {
+  Object.assign(env, { moveAnswer: '飞6' });
+  try {
+    await withFeatures({}, async (features, _said, _bodies, _home, { anims }) => {
+      emitPetBounds({ x: 0, y: 0, marginL: 100, marginT: 100, size: 300, bottomPad: 0 });
+      assert.deepEqual(await features.lookAtScreen(true), { ok: true, text: '主人在写代码呀' });
+      const move = anims.find((anim) => anim.name === '飞来飞去');
+      assert.ok(move, '应按 AI 选的位置飞过去');
+      const target = move.target as { x: number; y: number };
+      assert.ok(target.x > 0.7 && target.x < 0.9, `x=${target.x}`);
+      assert.ok(target.y > 0.35 && target.y < 0.65, `y=${target.y}`);
+    });
+  } finally {
+    Object.assign(env, { moveAnswer: '5' });
+  }
+});
+
+test('右键菜单：接了 AI 后「飞来飞去」先看屏幕选位置，再飞过去', async () => {
+  const clicks: string[] = [];
+  Object.assign(env, { moveAnswer: '飞9' });
+  try {
+    await withFeatures({ clicks }, async (_features, _said, _bodies, _home, { anims, menus }) => {
+      await until(() => menus.length > 0);
+      emitPetBounds({ x: 0, y: 0, marginL: 100, marginT: 100, size: 300, bottomPad: 0 });
+      clicks.push('飞来飞去');
+      await until(() => anims.some((anim) => anim.name === '飞来飞去' && anim.target !== undefined));
+      const move = anims.find((anim) => anim.name === '飞来飞去' && anim.target !== undefined);
+      const target = move?.target as { x: number; y: number };
+      assert.ok(target.x > 0.7, `x=${target.x}`);
+      assert.ok(target.y > 0.7, `y=${target.y}`);
+    });
+  } finally {
+    Object.assign(env, { moveAnswer: '5' });
+  }
 });
 
 test('右键菜单：耗时的动作不堵后面的点击（看屏幕还没看完，日记那项就先处理了）', async () => {

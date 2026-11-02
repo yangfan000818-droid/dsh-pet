@@ -32,6 +32,8 @@ export const env = {
   /** 非 null 时 streamVision 抛这个错（测「识别出不支持看图」那一拍） */
   visionError: null as Error | null,
   memeAnswer: '无',
+  /** 看屏幕后让 AI 选位置时它回答的九宫格（固定模式要数字，auto 模式最好「飞N / 走N」） */
+  moveAnswer: '5',
   /** 按调用顺序吐给 compose 的回答（用完后回落到 memeAnswer） */
   memeReplies: [] as string[],
   /** 非 null 时 compose 的模型调用卡在这里不返回（§X14 测「收摊不等感言」） */
@@ -214,7 +216,9 @@ export const ai = {
       throw error;
     }
     if (env.visionDelayMs > 0) await new Promise((done) => setTimeout(done, env.visionDelayMs));
-    yield { type: 'text', text: '主人在写代码呀' };
+    // 选位置那次问的是九宫格：按 env.moveAnswer 回，别把吐槽台词当坐标解析
+    const text = input.prompt.includes('九宫格') ? env.moveAnswer : '主人在写代码呀';
+    yield { type: 'text', text };
     env.visionDone += 1;
   },
 } as unknown as StandaloneAiService;

@@ -453,6 +453,7 @@ cp step04/*.webm assets/webm/   # 播放格式（VP9-alpha）
   <img src="assets/preview/pangxie-zoulu.gif" width="160" alt="螃蟹走路" title="螃蟹走路">
   <img src="assets/preview/yuandi-piaofu-tabu.gif" width="160" alt="原地漂浮踏步" title="原地漂浮踏步">
   <img src="assets/preview/yuandi-zuozhuan-benpao.gif" width="160" alt="原地左转奔跑" title="原地左转奔跑">
+  <img src="assets/preview/feilai-feiqu.gif" width="160" alt="飞来飞去" title="飞来飞去">
 </p>
 
 **小动作**

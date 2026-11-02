@@ -6,6 +6,9 @@ import { delay, errorText } from './util';
 export const MENU_OWNER = 'dsh-pet-app';
 const MENU_LOOK = '看看我在干嘛';
 const MENU_DIARY = '宠物日记';
+/** 两个常驻的移动点播：点了就按动作池里的同名素材走 / 飞一段（不在池里时宿主不播，只记日志） */
+const MENU_FLY = '飞来飞去';
+const MENU_WALK = '走两步';
 /** 宿主每个 owner 的菜单项上限（src/host/menu.ts 的 ITEMS_MAX，`>` 才拒） */
 const MENU_ITEMS_MAX = 20;
 
@@ -23,6 +26,7 @@ export function createMenu(ctx: FeatureContext): Menu {
     cultivationActions,
     duelChallengeActions,
     lookAtScreen,
+    moveWithAi,
     openDiary,
     petRequest,
     refreshStatus,
@@ -32,13 +36,15 @@ export function createMenu(ctx: FeatureContext): Menu {
   const { deps, log } = ctx;
   /**
    * 要注册的菜单项。宿主每个 owner 最多 20 项（`>` 就整份拒了，菜单从此不再更新），
-   * 所以这里按优先级兜底截断：固定的两项 + 修炼（最多 4：信息、渡劫、服丹后渡劫、领悟×2 中的一种组合）
+   * 所以这里按优先级兜底截断：固定的四项（看屏幕、日记、飞来飞去、走两步）+ 修炼（最多 4：信息、渡劫、服丹后渡劫、领悟×2 中的一种组合）
    * 在前，串门项在后——挤不下时先少列几个邻居 / 少几样一起玩和零食，「送客」「切磋」「心魔试炼」「渡劫」这些都要留。
    */
   function wantedLabels(): string[] {
     const labels = [
       MENU_LOOK,
       MENU_DIARY,
+      MENU_FLY,
+      MENU_WALK,
       ...cultivationActions().keys(),
       // 群架（X27）还在本地演示阶段：先排在串门项前面，方便真机看 3/4/5 人的围圈；
       // B4 接上联机、定下入口位置后再挪到切磋那一档
@@ -74,12 +80,27 @@ export function createMenu(ctx: FeatureContext): Menu {
     }
   }
 
+  /**
+   * 点播移动动画：接了 AI 就先看屏幕挑个位置，飞/走到那儿；AI 不可用或看不了时保持原来的随机移动。
+   * 宿主按名字找到 moves 动作就边播边走，找不到只回 unknown-animation。
+   */
+  async function playMove(kind: 'fly' | 'walk'): Promise<void> {
+    const name = kind === 'fly' ? '飞来飞去' : '螃蟹走路';
+    if (await moveWithAi(kind)) return;
+    const result = await petRequest('POST', '/anim', { name });
+    if (result.ok !== true) log(`点播「${name}」失败：${JSON.stringify(result)}`);
+  }
+
   async function onMenuClick(label: string): Promise<void> {
     const now = Date.now();
     if (label === MENU_LOOK) {
       await lookAtScreen(true);
     } else if (label === MENU_DIARY) {
       await openDiary(now);
+    } else if (label === MENU_FLY) {
+      await playMove('fly');
+    } else if (label === MENU_WALK) {
+      await playMove('walk');
     } else {
       const action =
         cultivationActions().get(label) ??
