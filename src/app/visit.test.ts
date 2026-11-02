@@ -6,7 +6,9 @@ import { createServer, request } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { NetworkInterfaceInfo } from 'node:os';
 import {
+  beaconPort,
   brawlLobbyOf,
+  BEACON_PORT,
   broadcastAddresses,
   cardFighter,
   cleanText,
@@ -2122,4 +2124,12 @@ test('群架报文邮箱：没开桌回 no-table；开桌后发两封能一次�
       assert.ok(Date.now() - started >= 80, '确实挂了一会儿');
     },
   );
+});
+
+test('信标端口：默认 47340，环境变量给了合用的端口就用它（同机两实例自测）', () => {
+  assert.equal(beaconPort({}), BEACON_PORT);
+  assert.equal(beaconPort({ DSH_PET_BEACON_PORT: '47341' }), 47341);
+  // 乱填的当没填
+  for (const bad of ['0', '-1', '70000', 'abc', ''])
+    assert.equal(beaconPort({ DSH_PET_BEACON_PORT: bad }), BEACON_PORT);
 });

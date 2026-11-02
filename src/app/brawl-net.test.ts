@@ -240,9 +240,46 @@ test('联机：人数不足 / 版本不同 / 满员拒入', () => {
   assert.equal(reject?.kind === 'reject' ? reject.reason : null, 'version');
 });
 
-// ---------------------------------------------------------------------------
-// 2. 每一手广播
-// ---------------------------------------------------------------------------
+test('联机：两台同时报名撞同一个编号，后到的按最新名单重报就进得来', () => {
+  const clock = new FakeClock();
+  const bus = makeBus();
+  const host = party(bus, clock, 0);
+  const first = party(bus, clock, 1);
+  first.net.join();
+  assert.deepEqual(
+    host.net.state().players.map((p) => p.id),
+    [0, 1],
+  );
+
+  // 第二台也以为自己是 1 号：join 直接递给房主（不占 bus 的 1 号节点，模拟另一条连接）
+  const late = createBrawlNet({
+    self: 1,
+    card: fighterFor(1),
+    nonce: nonceOf(1),
+    clock,
+    send: (msg) => {
+      if (msg.kind === 'join') host.net.receive(msg);
+    },
+  });
+  late.join();
+  assert.deepEqual(
+    host.net.state().players.map((p) => p.id),
+    [0, 1],
+    '撞号的那一家不占座位，先到的也不受影响',
+  );
+  const rejects = bus.log.filter((m): m is Extract<BrawlNetMsg, { kind: 'reject' }> => m.kind === 'reject');
+  assert.equal(last(rejects)?.reason, 'id', '撞号按 id 拒收');
+
+  // 后到的那台按房主最新名单用 2 号重报：房主收下，整桌能开打
+  const retry = party(bus, clock, 2);
+  retry.net.join();
+  assert.deepEqual(
+    host.net.state().players.map((p) => p.id),
+    [0, 1, 2],
+  );
+  host.net.start();
+  for (const node of [first, retry]) assert.equal(node.net.state().phase, 'running');
+});
 
 test('联机：每一手广播给所有参与者，index 连续', () => {
   const { parties } = setup(3);

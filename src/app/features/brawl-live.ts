@@ -450,6 +450,55 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       void say(`${neighbor.pet} 家的群架已经满员了～`);
       return;
     }
+    /**
+     * 客人的网络：编号按房主名单长度猜（房主的 welcome 以它为准）。
+     * 两台同时点「加入」会读到同一份名单、撞同一个编号——房主按 `id` 拒掉后，
+     * 按最新名单重报（`attempt` 记次数，别在真出错时死循环）。
+     */
+    const makeGuestNet = (self: number, attempt: number): BrawlNet =>
+      createBrawlNet({
+        self,
+        name: petName(),
+        card: practice.fighter(petName()),
+        nonce: randomSparNonce(),
+        send: sendFor(current),
+        turnOf: () => current.driver?.pending()?.id ?? null,
+        onStart: (state) => begin(current, state),
+        onDeliver: (move) => {
+          current.driver?.push(move);
+          if (current.driver?.done()) void show(current);
+        },
+        onExit: (id) => lostBeforeShow(current, id),
+        onReject: (reason) => {
+          current.driver?.retry();
+          log(`群架：房主没认这一手（${reason}）`);
+          if (reason === 'id' && !current.driver) void rejoin(current, attempt + 1);
+        },
+        onHostChange: (hostId) => {
+          const next = current.peers.get(hostId);
+          if (next) current.host = next;
+        },
+      });
+
+    /** 撞编号被拒：等一拍、按房主最新名单重报；名单满 / 连不上就把这张桌收掉 */
+    async function rejoin(current: LiveTable, attempt: number): Promise<void> {
+      if (attempt > 3 || table !== current || current.driver) return;
+      await delay(300);
+      if (table !== current || current.driver) return;
+      const to = current.host;
+      if (!to) return;
+      const next = await brawlLobbyOf(to);
+      if (table !== current || current.driver) return;
+      if (!next.ok || next.players.length >= BRAWL_MAX) {
+        closeTable(current);
+        void refreshMenu();
+        return;
+      }
+      current.net.dispose();
+      current.net = makeGuestNet(next.players.length, attempt);
+      current.net.join();
+    }
+
     const current: LiveTable = {
       role: 'guest',
       net: null as unknown as BrawlNet,
@@ -463,29 +512,7 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       panel: null,
       asking: false,
     };
-    current.net = createBrawlNet({
-      // 房主按 players.length 发编号；先按名单长度猜，welcome 以房主发的为准
-      self: lobby.players.length,
-      name: petName(),
-      card: practice.fighter(petName()),
-      nonce: randomSparNonce(),
-      send: sendFor(current),
-      turnOf: () => current.driver?.pending()?.id ?? null,
-      onStart: (state) => begin(current, state),
-      onDeliver: (move) => {
-        current.driver?.push(move);
-        if (current.driver?.done()) void show(current);
-      },
-      onExit: (id) => lostBeforeShow(current, id),
-      onReject: (reason) => {
-        current.driver?.retry();
-        log(`群架：房主没认这一手（${reason}）`);
-      },
-      onHostChange: (hostId) => {
-        const next = current.peers.get(hostId);
-        if (next) current.host = next;
-      },
-    });
+    current.net = makeGuestNet(lobby.players.length, 0);
     table = current;
     startPoll(current);
     current.net.join();
@@ -545,7 +572,7 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     return actions;
   }
 
-  /** VisitHost 收报文：先按桌上的编号登记来源地址，再入队等本机轮询取走 */
+  /** VisitHost 收报文：房主收到报名就地办完，其余报文入队等本机轮询取走 */
   function brawlMsg(raw: unknown, address: string): boolean {
     const current = table;
     if (!current || current.showing) return false;
@@ -554,9 +581,21 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
     if (current.role === 'host' && msg.kind === 'join') {
       const port = Number((raw as { port?: unknown }).port);
       if (!Number.isInteger(port) || port <= 0) return false;
+      // 就地处理，不排队：两条报名同时到时，排队版本里第二封读到的还是旧名单，
+      // 会把它的地址写成「下一个编号」的地址、顶掉先到那家的（之后 welcome / start 全发错人）。
+      // 先把地址登记成发件人（welcome / 拒收都要能回到它），处理完不是新入座的再还回去。
+      const before = current.net.state().players.length;
+      const previous = current.peers.get(msg.from);
       current.peers.set(msg.from, { address, port });
+      current.net.receive(msg);
+      if (current.net.state().players.length !== before + 1) {
+        if (previous) current.peers.set(msg.from, previous);
+        else current.peers.delete(msg.from);
+        return false;
+      }
       void say(`${msg.name || '有桌宠'} 加入群架桌啦～`);
       void refreshMenu();
+      return false;
     }
     return true;
   }

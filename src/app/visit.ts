@@ -63,6 +63,15 @@ import type { VisitIdentity } from './visit-identity';
 
 /** 信标端口（7340 是插件路由前缀里的那个数） */
 export const BEACON_PORT = 47340;
+
+/**
+ * 信标端口：默认 `BEACON_PORT`；同一台机子开两个实例做联机自测时，
+ * 用环境变量 `DSH_PET_BEACON_PORT` 各走一个（不然两个实例抢同一个 UDP 端口，互相看不见）。
+ */
+export function beaconPort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.DSH_PET_BEACON_PORT);
+  return Number.isInteger(raw) && raw > 0 && raw <= 65535 ? raw : BEACON_PORT;
+}
 const BEACON_MS = 5_000;
 const NEIGHBOR_TTL_MS = 20_000;
 /** 回发名单最多记几个：满了丢最久没收到的那位 */
@@ -425,7 +434,7 @@ export class Neighborhood {
     const socket = createSocket({ type: 'udp4', reuseAddr: true });
     await new Promise<void>((resolve, reject) => {
       socket.once('error', reject);
-      socket.bind(this.options.port ?? BEACON_PORT, () => {
+      socket.bind(this.options.port ?? beaconPort(), () => {
         socket.off('error', reject);
         resolve();
       });
@@ -481,7 +490,8 @@ export class Neighborhood {
     this.pruneReplies(now);
     const payload = encodeBeacon({ id: this.options.id, ...self });
     const targets = uniqueTargets([
-      ...(this.options.targets?.() ?? broadcastAddresses().map((address) => ({ address, port: BEACON_PORT }))),
+      ...(this.options.targets?.() ??
+        broadcastAddresses().map((address) => ({ address, port: this.options.port ?? beaconPort() }))),
       ...(this.options.peers?.() ?? []),
       ...[...this.replies.values()].map(({ address, port }) => ({ address, port })),
     ]);
