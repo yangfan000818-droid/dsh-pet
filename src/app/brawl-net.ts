@@ -509,11 +509,13 @@ class BrawlNetImpl implements BrawlNet {
       target: move.target,
       action: cloneAction(move.action),
     };
-    this.opts.onDeliver?.(delivered);
+    // 先广播再叫本地驱动：驱动可能在 onDeliver 里同步出下一手（下一手又是房主时），
+    // 那样后一手会排到前面去，对家按 index 连续收，前一手就被当成跳号丢掉了
     for (const p of this.players) {
       if (p.id === this.myId) continue;
       this.send({ kind: 'move', from: this.myId, to: p.id, ...delivered, action: cloneAction(delivered.action) });
     }
+    this.opts.onDeliver?.(delivered);
     this.arm();
   }
 
@@ -589,8 +591,11 @@ class BrawlNetImpl implements BrawlNet {
     if (msg.epoch !== this.epochNo) return;
     if (msg.actor !== msg.from || msg.actor === this.myId) return;
     if (!this.aliveIds.includes(msg.actor)) return;
-    this.applyExit(msg.actor, 'forfeit');
+    if (!this.applyExit(msg.actor, 'forfeit')) return;
     this.broadcastExit(msg.actor, 'forfeit', this.myId);
+    // 公告先发出去，再叫接线方：它会在 onExit 里同步走下一手，
+    // 那一手必须排在退场公告后面（对家先认出人不在场，才收得下下一手）
+    this.opts.onExit?.(msg.actor, 'forfeit');
     this.arm();
     this.maybeEnd();
   }
@@ -598,9 +603,10 @@ class BrawlNetImpl implements BrawlNet {
   /** 房主自己认输：先换代，再把退场公告发出去 */
   private hostForfeit(): void {
     const lost = this.myId;
-    this.applyExit(lost, 'forfeit');
+    if (!this.applyExit(lost, 'forfeit')) return;
     const survivors = [...this.aliveIds].sort((a, b) => a - b);
     if (survivors.length === 0) {
+      this.opts.onExit?.(lost, 'forfeit');
       this.finish();
       return;
     }
@@ -609,6 +615,7 @@ class BrawlNetImpl implements BrawlNet {
     this.hostId = newHost;
     this.broadcastHostChange(newHost, newHost);
     this.broadcastExit(lost, 'forfeit', newHost);
+    this.opts.onExit?.(lost, 'forfeit');
     this.arm();
     this.maybeEnd();
   }
@@ -618,9 +625,11 @@ class BrawlNetImpl implements BrawlNet {
     if (this.phase !== 'running' || this.disposed) return;
     if (this.myId === this.hostId) return;
     const lost = this.hostId;
-    this.applyExit(lost, 'timeout');
+    // 收到的退场报文可能已经先把它移出名单（onExit 里），这时只做交接、不重复通知
+    const applied = this.applyExit(lost, 'timeout');
     const survivors = [...this.aliveIds].sort((a, b) => a - b);
     if (survivors.length === 0) {
+      if (applied) this.opts.onExit?.(lost, 'timeout');
       this.finish();
       return;
     }
@@ -635,6 +644,7 @@ class BrawlNetImpl implements BrawlNet {
       this.broadcastHostChange(newHost, newHost);
       this.broadcastExit(lost, 'timeout', newHost);
     }
+    if (applied) this.opts.onExit?.(lost, 'timeout');
     this.arm();
     this.maybeEnd();
   }
@@ -642,8 +652,9 @@ class BrawlNetImpl implements BrawlNet {
   private hostTurnTimeout(actor: number): void {
     if (this.phase !== 'running' || this.myId !== this.hostId) return;
     if (this.expectedActor() !== actor || actor === this.myId) return;
-    this.applyExit(actor, 'timeout');
+    if (!this.applyExit(actor, 'timeout')) return;
     this.broadcastExit(actor, 'timeout', this.myId);
+    this.opts.onExit?.(actor, 'timeout');
     this.arm();
     this.maybeEnd();
   }
@@ -685,13 +696,16 @@ class BrawlNetImpl implements BrawlNet {
     if (this.phase !== 'running') return;
     if (msg.epoch !== this.epochNo) return;
     const wasHost = msg.actor === this.hostId;
-    this.applyExit(msg.actor, msg.reason);
+    const applied = this.applyExit(msg.actor, msg.reason);
     this.strikes = 0;
     this.awaitingRelay = false;
     if (wasHost) {
+      // 交接先办完（换代公告要先于退场公告），再把退场交给接线方
       this.hostLost();
+      if (applied) this.opts.onExit?.(msg.actor, msg.reason);
       return;
     }
+    if (applied) this.opts.onExit?.(msg.actor, msg.reason);
     this.arm();
     this.maybeEnd();
   }
@@ -720,7 +734,6 @@ class BrawlNetImpl implements BrawlNet {
     if (!this.aliveIds.includes(id)) return false;
     this.aliveIds = this.aliveIds.filter((x) => x !== id);
     this.exitList.push({ id, reason });
-    this.opts.onExit?.(id, reason);
     return true;
   }
 

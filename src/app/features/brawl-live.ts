@@ -29,7 +29,14 @@ import {
 import { createBrawlLive, type BrawlLive } from '../brawl-live';
 import { createBrawlNet, type BrawlNet, type BrawlNetMsg, type BrawlNetState } from '../brawl-net';
 import { runBrawl } from '../brawl-run';
-import { brawlLobbyOf, pollBrawlMsgs, postBrawlMsg, randomSparNonce, type HostAddress } from '../visit';
+import {
+  brawlLobbyOf,
+  createSendChain,
+  pollBrawlMsgs,
+  postBrawlMsg,
+  randomSparNonce,
+  type HostAddress,
+} from '../visit';
 import { CLOSE_HOLD_MS, MENU_BRAWL_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
 import { delay, errorText } from './util';
@@ -100,6 +107,8 @@ export interface BrawlLiveFeature {
 export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
   const { cultivationOn, holdPet, petName, playExtra, refreshMenu, releasePet, say, petRequest } = lazyFns(ctx);
   const { deps, electron, homePet, log } = ctx;
+  /** 同一收件地址串行发送：并发 POST 的到达顺序不可依赖，乱序的一手会被对家丢掉 */
+  const sendChain = createSendChain();
   let table: LiveTable | null = null;
 
   /** 现在正打着别的（切磋 / 心魔 / 历练）：先排队 */
@@ -133,9 +142,11 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       if (!to) return;
       // join 再带一个「往哪儿回」的端口：房主按来源地址 + 这个端口拼回信地址
       const body: Record<string, unknown> = msg.kind === 'join' ? { ...msg, port: ctx.state.hostPort } : { ...msg };
-      void postBrawlMsg(to, body).catch((error: unknown) => {
-        log(`群架：发给 ${to.address}:${to.port} 失败：${errorText(error)}`);
-      });
+      sendChain
+        .push(`${to.address}:${to.port}`, () => postBrawlMsg(to, body))
+        .catch((error: unknown) => {
+          log(`群架：发给 ${to.address}:${to.port} 失败：${errorText(error)}`);
+        });
     };
   }
 

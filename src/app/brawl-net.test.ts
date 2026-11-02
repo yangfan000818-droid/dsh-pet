@@ -281,6 +281,81 @@ test('联机：两台同时报名撞同一个编号，后到的按最新名单�
   for (const node of [first, retry]) assert.equal(node.net.state().phase, 'running');
 });
 
+test('联机：房主收下这一手后同步接着出下一手，广播仍按 index 顺序（后一手不能先发）', () => {
+  const clock = new FakeClock();
+  const bus = makeBus();
+  const host: BrawlNet = createBrawlNet({
+    self: 0,
+    card: fighterFor(0),
+    nonce: nonceOf(0),
+    clock,
+    send: bus.send,
+    onDeliver: (move) => {
+      // 2 号这一手之后轮到房主：在 onDeliver 里立刻交出下一手，复现嵌套 acceptMove
+      if (move.index === 2) host.submitMove(1, { kind: 'unarmed' });
+    },
+  });
+  bus.register(0, host);
+  const g1 = party(bus, clock, 1);
+  const g2 = party(bus, clock, 2);
+  g1.net.join();
+  g2.net.join();
+  host.start();
+
+  host.submitMove(1, { kind: 'unarmed' });
+  g1.net.submitMove(2, { kind: 'unarmed' });
+  g2.net.submitMove(0, { kind: 'unarmed' }); // 收下这一手的同时，房主接 idx3
+
+  const broadcast = bus.log
+    .filter((m): m is Extract<BrawlNetMsg, { kind: 'move' }> => m.kind === 'move' && m.from === 0)
+    .map((m) => m.index);
+  // 每一手分别发给两位客人：去重后看先后
+  assert.deepEqual([...new Set(broadcast)], [0, 1, 2, 3], '房主按 index 顺序广播');
+  for (const { net, spy } of [g1, g2]) {
+    assert.equal(net.state().index, 4);
+    assert.deepEqual(
+      spy.moves.map((m) => m.index),
+      [0, 1, 2, 3],
+    );
+  }
+});
+
+test('联机：超时退场的公告先于紧跟着的下一手广播', () => {
+  const clock = new FakeClock();
+  const bus = makeBus();
+  const host: BrawlNet = createBrawlNet({
+    self: 0,
+    card: fighterFor(0),
+    nonce: nonceOf(0),
+    clock,
+    send: bus.send,
+    onExit: (id) => {
+      // 2 号退场后轮到房主：驱动在 onExit 里同步交下一手
+      if (id === 2) host.submitMove(1, { kind: 'unarmed' });
+    },
+  });
+  bus.register(0, host);
+  const g1 = party(bus, clock, 1);
+  const g2 = party(bus, clock, 2);
+  g1.net.join();
+  g2.net.join();
+  host.start();
+  host.submitMove(1, { kind: 'unarmed' }); // idx0
+  g1.net.submitMove(2, { kind: 'unarmed' }); // idx1，之后轮到 2 号
+  clock.advance(35_000); // 2 号没来：房主判退场，紧接着自己出 idx2
+
+  const fromHost = bus.log.filter((m) => m.from === 0 && (m.kind === 'exit' || m.kind === 'move'));
+  const exitAt = fromHost.findIndex((m) => m.kind === 'exit');
+  const nextMoveAt = fromHost.findIndex((m) => m.kind === 'move' && m.index === 2);
+  assert.ok(exitAt >= 0, '退场公告发出去了');
+  assert.ok(nextMoveAt > exitAt, '下一手排在退场公告后面');
+  assert.deepEqual(g1.spy.exits, [{ id: 2, reason: 'timeout' }]);
+  assert.deepEqual(
+    g1.spy.moves.map((m) => m.index),
+    [0, 1, 2],
+  );
+});
+
 test('联机：每一手广播给所有参与者，index 连续', () => {
   const { parties } = setup(3);
   parties[0].net.submitMove(1, { kind: 'unarmed' });

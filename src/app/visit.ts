@@ -1498,6 +1498,35 @@ export async function postBrawlMsg(host: HostAddress, msg: unknown, timeoutMs = 
 }
 
 /**
+ * 同一收件地址的发送排成一列（X27 联机）：每封报文都是一次独立 POST，
+ * 并发发出去时接收端处理的先后并不保证；brawl-net 只收 index 连续的一手，
+ * 乱序到达的那一手会被当成跳号丢掉，整桌就此卡住。
+ */
+export interface SendChain {
+  /** 把这次发送接到该地址上一次发送之后；返回这一次的 promise（失败照常交给调用方，队列不断） */
+  push(key: string, send: () => Promise<unknown>): Promise<unknown>;
+}
+
+export function createSendChain(): SendChain {
+  const tails = new Map<string, Promise<unknown>>();
+  return {
+    push(key, send) {
+      const tail = tails.get(key) ?? Promise.resolve();
+      const run = tail.then(send);
+      // 队列尾巴吞掉成败：这一次失败不能卡住后面同地址的报文
+      tails.set(
+        key,
+        run.then(
+          () => undefined,
+          () => undefined,
+        ),
+      );
+      return run;
+    },
+  };
+}
+
+/**
  * 取走这家的群架报文（没有就挂到 `waitMs`）。连不上抛错。
  * 返回的报文是线上原样（`BrawlNetMsg`），由 brawl-net 的 `receive` 判要不要。
  */

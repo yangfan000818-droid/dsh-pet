@@ -12,6 +12,7 @@ import {
   broadcastAddresses,
   cardFighter,
   cleanText,
+  createSendChain,
   encodeBeacon,
   encodeProbe,
   isLanAddress,
@@ -2132,4 +2133,64 @@ test('信标端口：默认 47340，环境变量给了合用的端口就用它�
   // 乱填的当没填
   for (const bad of ['0', '-1', '70000', 'abc', ''])
     assert.equal(beaconPort({ DSH_PET_BEACON_PORT: bad }), BEACON_PORT);
+});
+
+test('群架发送链：同一地址的报文按发出顺序到达，先发的慢也不会被后发的超车', async () => {
+  const chain = createSendChain();
+  const started: number[] = [];
+  const done: number[] = [];
+  const make =
+    (n: number): (() => Promise<void>) =>
+    () => {
+      started.push(n);
+      // 第一封故意慢：没有串行时后面的会先完成
+      return new Promise((resolve) =>
+        setTimeout(
+          () => {
+            done.push(n);
+            resolve();
+          },
+          n === 0 ? 30 : 0,
+        ),
+      );
+    };
+  chain.push('10.0.0.2:7340', make(0));
+  chain.push('10.0.0.2:7340', make(1));
+  chain.push('10.0.0.2:7340', make(2));
+  await chain.push('10.0.0.2:7340', make(3));
+  assert.deepEqual(started, [0, 1, 2, 3]);
+  assert.deepEqual(done, [0, 1, 2, 3]);
+});
+
+test('群架发送链：一封失败了，后面同地址的照发不误', async () => {
+  const chain = createSendChain();
+  const done: string[] = [];
+  const failed = chain.push('10.0.0.2:7340', () => Promise.reject(new Error('连不上')));
+  await assert.rejects(failed, /连不上/);
+  await chain.push('10.0.0.2:7340', () => {
+    done.push('after');
+    return Promise.resolve();
+  });
+  assert.deepEqual(done, ['after']);
+});
+
+test('群架发送链：不同地址各走各的，不会被别家卡住', async () => {
+  const chain = createSendChain();
+  const order: string[] = [];
+  let release = (): void => undefined;
+  const slow = chain.push('10.0.0.2:7340', () =>
+    new Promise<void>((resolve) => {
+      release = resolve;
+    }).then(() => {
+      order.push('slow');
+    }),
+  );
+  await chain.push('10.0.0.3:7340', () => {
+    order.push('fast');
+    return Promise.resolve();
+  });
+  assert.deepEqual(order, ['fast']);
+  release();
+  await slow;
+  assert.deepEqual(order, ['fast', 'slow']);
 });
