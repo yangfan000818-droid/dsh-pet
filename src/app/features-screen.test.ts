@@ -1,7 +1,10 @@
 import { UNSUPPORTED_IMAGE_MESSAGE } from '../standalone/ai-provider.ts';
+import { findPetInstance, readAllConfig } from '../host/config.ts';
+import { configPathsFor } from '../standalone/options.ts';
 import { diaryDate } from './diary.ts';
 import type { DiaryDay } from './diary.ts';
 import {
+  packageRoot,
   withFeatures,
   env,
   last,
@@ -15,6 +18,13 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
+
+/** 这套测试目录下宠物配置里的移动动作名（菜单随机池与配置同源） */
+function moveNames(home: string): string[] {
+  const conf = findPetInstance(readAllConfig(configPathsFor(packageRoot, home)), 'main')?.conf;
+  const moves = (conf?.animations as { moves?: { actions?: Array<{ name?: unknown }> } } | undefined)?.moves;
+  return (moves?.actions ?? []).flatMap((action) => (typeof action?.name === 'string' ? [action.name] : []));
+}
 
 test('看屏幕：说出来了才算成功', async () => {
   await withFeatures({}, async (features) => {
@@ -88,18 +98,22 @@ test('看屏幕：表情包池为空就不配图', async () => {
   });
 });
 
-test('右键菜单：飞来飞去、走两步排在看看我在干嘛和宠物日记下面，点了就点播对应动作', async () => {
-  const clicks: string[] = [];
-  await withFeatures({ clicks }, async (_features, _said, _bodies, _home, { menus, anims }) => {
-    await until(() => menus.length > 0);
-    assert.deepEqual((last(menus) ?? []).slice(0, 4), ['看看我在干嘛', '宠物日记', '飞来飞去', '走两步']);
-    clicks.push('飞来飞去', '走两步');
-    await until(() => anims.length >= 2);
-    assert.deepEqual(
-      anims.filter((anim) => anim.name !== undefined).map((anim) => anim.name),
-      ['飞来飞去', '螃蟹走路'],
-    );
-  });
+test('右键菜单：「动一动」排在看看我在干嘛和宠物日记下面，点了在移动池里随机点播一个', async () => {
+  // 注入随机数把「随机」固定住：0 取第一项、1 取最后一项，两条都点一遍
+  for (const rng of [0, 1] as const) {
+    const clicks: string[] = [];
+    await withFeatures({ clicks, moveRng: () => rng }, async (_features, _said, _bodies, home, { menus, anims }) => {
+      const names = moveNames(home);
+      await until(() => menus.length > 0);
+      assert.deepEqual((last(menus) ?? []).slice(0, 4), ['看看我在干嘛', '宠物日记', '动一动', '羁绊']);
+      clicks.push('动一动');
+      await until(() => anims.length > 0);
+      assert.deepEqual(
+        anims.filter((anim) => anim.name !== undefined).map((anim) => anim.name),
+        [rng === 0 ? names[0] : names[names.length - 1]],
+      );
+    });
+  }
 });
 
 test('看屏幕：接了 AI 就按看到的内容飞/走到九宫格选的位置', async () => {
@@ -119,14 +133,14 @@ test('看屏幕：接了 AI 就按看到的内容飞/走到九宫格选的位置
   }
 });
 
-test('右键菜单：接了 AI 后「飞来飞去」先看屏幕选位置，再飞过去', async () => {
+test('右键菜单：接了 AI 后「动一动」先看屏幕选位置，再飞过去', async () => {
   const clicks: string[] = [];
   Object.assign(env, { moveAnswer: '飞9' });
   try {
-    await withFeatures({ clicks }, async (_features, _said, _bodies, _home, { anims, menus }) => {
+    await withFeatures({ clicks, moveRng: () => 1 }, async (_features, _said, _bodies, _home, { anims, menus }) => {
       await until(() => menus.length > 0);
       emitPetBounds({ x: 0, y: 0, marginL: 100, marginT: 100, size: 300, bottomPad: 0 });
-      clicks.push('飞来飞去');
+      clicks.push('动一动');
       await until(() => anims.some((anim) => anim.name === '飞来飞去' && anim.target !== undefined));
       const move = anims.find((anim) => anim.name === '飞来飞去' && anim.target !== undefined);
       const target = move?.target as { x: number; y: number };

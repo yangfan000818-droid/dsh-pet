@@ -271,6 +271,8 @@ export async function withFeatures(
     clicks?: string[];
     /** 修炼用注入的随机数（丹药等） */
     rng?: () => number;
+    /** 右键「动一动」随机飞 / 走用的随机数 */
+    moveRng?: () => number;
     /** 启动前写进 cultivation.json 的存档（比如造一个快圆满的） */
     cultivation?: Record<string, unknown>;
     /** 启动前写进 neighbors.json 的邻居簿（隔空切磋要按 id 记账） */
@@ -366,6 +368,7 @@ export async function withFeatures(
     cultivationPath: join(home, 'cultivation.json'),
     bondPath: join(home, 'bond.json'),
     cultivationRng: options.rng,
+    moveRng: options.moveRng,
     sparWaitMs: options.sparWaitMs,
     modeTimeoutMs: options.modeTimeoutMs,
     aiTurnTimeoutMs: options.aiTurnTimeoutMs,

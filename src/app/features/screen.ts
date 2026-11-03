@@ -22,8 +22,8 @@ interface Meme {
 /** 看屏幕 */
 export interface Screen {
   lookAtScreen(manual: boolean): Promise<{ ok: boolean; text?: string; image?: string; reason?: string }>;
-  /** AI 看屏幕挑个位置并飞/走过去。AI 不可用、看不了、没位置信息或解析失败 → false（调用方自行兜底） */
-  moveWithAi(kind: MoveKind): Promise<boolean>;
+  /** AI 看屏幕挑个位置并飞/走/瞬移过去，用调用方指定的移动动作。AI 不可用、看不了、没位置信息或解析失败 → false（调用方自行兜底） */
+  moveWithAi(kind: MoveKind, name: string): Promise<boolean>;
 }
 
 export function createScreen(ctx: FeatureContext): Screen {
@@ -131,12 +131,14 @@ export function createScreen(ctx: FeatureContext): Screen {
    * 用一张已经截好的屏幕图让 AI 选位置，并真的发 /anim（带 target）。
    * 独立于看屏幕的吐槽调用：同一个 prompt 里同时要台词和坐标会让小模型把两件事说串。
    * @param respectFixed 宠物固定时不动（看屏幕后自动移动用；菜单点播是主人明确要它走，照走）
+   * @param name 菜单指定的移动动作；不传时按目标远近在「飞来飞去 / 螃蟹走路」里二选一
    */
   async function askMoveTarget(
     image: string,
     area: Rect,
     kind: MoveKind | 'auto',
     respectFixed: boolean,
+    name?: string,
   ): Promise<boolean> {
     const box = homePet.box();
     if (!box) return false;
@@ -175,22 +177,22 @@ export function createScreen(ctx: FeatureContext): Screen {
       current,
     });
     if (!target) return false;
-    const name = target.kind === 'fly' ? '飞来飞去' : '螃蟹走路';
+    const animName = name ?? (target.kind === 'fly' ? '飞来飞去' : '螃蟹走路');
     try {
-      const result = await petRequest('POST', '/anim', { name, target: { x: target.x, y: target.y } });
+      const result = await petRequest('POST', '/anim', { name: animName, target: { x: target.x, y: target.y } });
       if (result.ok !== true) {
-        log(`AI 选好位置但点播失败（${name}）：${JSON.stringify(result)}`);
+        log(`AI 选好位置但点播失败（${animName}）：${JSON.stringify(result)}`);
         return false;
       }
     } catch (error) {
-      log(`AI 选好位置但点播失败（${name}）：${errorText(error)}`);
+      log(`AI 选好位置但点播失败（${animName}）：${errorText(error)}`);
       return false;
     }
     return true;
   }
 
-  /** 菜单点播「飞来飞去 / 走两步」：AI 看屏幕并走过去；没接 AI / 看不了 → false，调用方退回随机移动 */
-  async function moveWithAi(kind: MoveKind): Promise<boolean> {
+  /** 菜单点播「动一动」（按移动池随机）：AI 看屏幕并过去；没接 AI / 看不了 → false，调用方退回随机移动 */
+  async function moveWithAi(kind: MoveKind, name: string): Promise<boolean> {
     if (!ai.isReady() || !ai.canSeeScreen()) return false;
     // 菜单点播不主动弹系统授权框：没授权就退回原来的随机移动
     if (electron.systemPreferences.getMediaAccessStatus('screen') !== 'granted') return false;
@@ -211,7 +213,7 @@ export function createScreen(ctx: FeatureContext): Screen {
     const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
     if (!source || source.thumbnail.isEmpty()) return false;
     const image = 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(70).toString('base64');
-    return askMoveTarget(image, display.workArea, kind, false);
+    return askMoveTarget(image, display.workArea, kind, false, name);
   }
 
   async function lookAtScreen(

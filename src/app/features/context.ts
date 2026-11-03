@@ -113,6 +113,8 @@ export interface FeatureDeps {
   bondPath: string;
   /** 修炼用的随机数（丹药、成长随机项）；只给测试注入固定序列用，平时不传 */
   cultivationRng?: () => number;
+  /** 右键「动一动」随机飞 / 走用的随机数；只给测试注入固定序列用，平时不传 */
+  moveRng?: () => number;
   /** 切磋等客人应战 / 亮随机数的时限（默认 30 秒，超时按客人认输）；只给测试调短用 */
   sparWaitMs?: number;
   /** 逐手出招（X17）：选方式 10 秒不点按自动；只给测试调短用 */
@@ -455,7 +457,7 @@ export interface FeatureFunctions {
   speak(instruction: string, fallback: string, options?: SayOptions): Promise<void>;
   sayLine(text: string, options?: SayOptions): Promise<void>;
   lookAtScreen(manual: boolean): Promise<{ ok: boolean; text?: string; image?: string; reason?: string }>;
-  moveWithAi(kind: 'fly' | 'walk'): Promise<boolean>;
+  moveWithAi(kind: 'fly' | 'walk', name: string): Promise<boolean>;
   activityContext(): string;
   tick(): Promise<void>;
   schedule(): void;

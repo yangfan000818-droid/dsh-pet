@@ -911,7 +911,16 @@ class PetSprite {
       targetY: hasTarget ? target.y * H : undefined,
     });
     if (!plan) return false;
-    this.pendingMove = { ...plan, dir, leadSec: mp.leadSec, tailSec: mp.tailSec };
+    // 瞬移类（定仙游 / 遁地）：不做线性平移，动画消失的那一拍直接把窗口放到目标点。
+    // teleportAt 是素材总时长的比例（0–1），对准素材里角色完全消失的时段。
+    this.pendingMove = {
+      ...plan,
+      dir,
+      leadSec: mp.leadSec,
+      tailSec: mp.tailSec,
+      teleport: mp.teleport === true,
+      teleportAt: Number.isFinite(mp.teleportAt) ? mp.teleportAt : 0.5,
+    };
     this.anim = chosen.name;
     this.once = true;
     // rate（POST /anim 点播移动动画时给的倍速）跟着换源一起走：/anim 的 name 形态两条路都要生效；
@@ -925,15 +934,40 @@ class PetSprite {
     const pm = this.pendingMove;
     if (!pm || this.moveRef !== null) return;
     this.pendingMove = null;
-    const { startRatio, startYRatio, targetRatio, targetYRatio, dir, totalRatio, totalYRatio, leadSec, tailSec } = pm;
+    const {
+      startRatio,
+      startYRatio,
+      targetRatio,
+      targetYRatio,
+      dir,
+      totalRatio,
+      totalYRatio,
+      leadSec,
+      tailSec,
+      teleport,
+      teleportAt,
+    } = pm;
     const duration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 10.09;
     const travelWindow = Math.max(0.1, duration - leadSec - tailSec);
+    // 瞬移：在素材的这一比例处（角色消失的那一刻）把窗口直接放到终点，前后都不平移。
+    const jumpAt = Math.min(Math.max(teleportAt, 0), 1) * duration;
     const token = ++this.moveToken;
     const W = VIEW.w;
     const H = VIEW.h;
     const step = () => {
       if (this.moveToken !== token) return;
       const t = el.currentTime || 0;
+      if (teleport) {
+        const jumped = t >= jumpAt;
+        const rx = jumped ? targetRatio : startRatio;
+        const ry = jumped ? targetYRatio : startYRatio;
+        this.sendBounds(rx * W - this.halfW, ry * H - this.halfH);
+        if (jumped) this.customPos = { rx: targetRatio, ry: targetYRatio };
+        // 窗口已经落位；继续占着 moveRef 到动画结束，避免瞬移途中又被别的移动指令插队
+        if (t < duration - 0.05) this.moveRef = requestAnimationFrame(step);
+        else this.moveRef = null;
+        return;
+      }
       let ratioX;
       let ratioY;
       if (t <= leadSec) {

@@ -226,13 +226,29 @@
     //   写了就是「飞行」：水平方向仍由朝向决定，垂直方向随机，贴屏边时自动收短；
     // rate=播放倍速（0.5–3，不写=1）——飞行类动作靠快进让素材变成一次利落的冲刺；
     // margin=贴边安全距(px，不随缩放)、leadSec/tailSec=动画首尾各多少秒原地不动。
+    // teleport=true 的瞬移动作不做线性平移：teleportAt（素材时长比例 0–1）那一刻把窗口直接放到目标点。
     "moves": {
       "default": { "minDist": 60, "maxDist": 240, "margin": 20, "leadSec": 2, "tailSec": 2 },
       "actions": [
         { "name": "螃蟹走路" },
         { "name": "原地漂浮踏步", "params": { "minDist": 40, "maxDist": 120 } },
         { "name": "原地左转奔跑", "params": { "minDist": 120, "maxDist": 320, "leadSec": 1.75, "tailSec": 4.8 } },
+        // 2026-11 新增：地面移动 10 秒素材，leadSec/tailSec 对准首尾站立段
+        { "name": "跳着走", "params": { "minDist": 100, "maxDist": 300, "leadSec": 1.2, "tailSec": 1.2 } },
+        { "name": "咕噜咕噜滚动", "params": { "minDist": 180, "maxDist": 480, "leadSec": 1.5, "tailSec": 1.5 } },
+        { "name": "小碎步快跑", "params": { "minDist": 160, "maxDist": 420, "leadSec": 1.2, "tailSec": 1.2, "rate": 1.15 } },
+        { "name": "侧身滑步", "params": { "minDist": 160, "maxDist": 420, "leadSec": 1.3, "tailSec": 1.3 } },
+        { "name": "骑自行车", "params": { "minDist": 200, "maxDist": 520, "leadSec": 1.5, "tailSec": 1.5, "rate": 1.1 } },
+        { "name": "滑板", "params": { "minDist": 200, "maxDist": 520, "leadSec": 1.5, "tailSec": 1.5, "rate": 1.1 } },
+        { "name": "凌波微步", "params": { "minDist": 160, "maxDist": 420, "leadSec": 1.3, "tailSec": 1.3, "rate": 1.1 } },
+        { "name": "太空步", "params": { "minDist": 100, "maxDist": 280, "leadSec": 1.5, "tailSec": 1.5, "rate": 0.9 } },
         // 飞行滑行：横向 400–900px、上下 -220–+280px，1.3 倍速让 5 秒素材变成一次利落的冲刺
+        { "name": "御剑飞行", "params": { "minDist": 400, "maxDist": 900, "minRise": -220, "maxRise": 280, "leadSec": 0.8, "tailSec": 1.2, "rate": 1.3 } },
+        { "name": "骑鲸飞行", "params": { "minDist": 350, "maxDist": 800, "minRise": -180, "maxRise": 240, "leadSec": 0.9, "tailSec": 1.3, "rate": 1.2 } },
+        // 瞬移：消失段里窗口直接落位；定仙游复用秘境动作的 4 秒素材（约 2.5 秒消失 / 3.1 秒重现）
+        { "name": "遁地", "params": { "teleport": true, "teleportAt": 0.55, "minDist": 200, "maxDist": 600, "leadSec": 0, "tailSec": 0 } },
+        { "name": "地狼蛛遁地", "params": { "teleport": true, "teleportAt": 0.48, "minDist": 200, "maxDist": 600, "leadSec": 0, "tailSec": 0 } },
+        { "name": "秘境-定仙游", "params": { "teleport": true, "teleportAt": 0.625, "minDist": 200, "maxDist": 600, "leadSec": 0, "tailSec": 0 } },
         { "name": "飞来飞去", "params": { "minDist": 400, "maxDist": 900, "minRise": -220, "maxRise": 280, "leadSec": 0.8, "tailSec": 1.2, "rate": 1.3 } }
       ]
     },
