@@ -465,7 +465,6 @@ cp step04/*.webm assets/webm/   # 播放格式（VP9-alpha）
   <img src="assets/preview/yuandi-zuozhuan-benpao.gif" width="160" alt="原地左转奔跑" title="原地左转奔跑">
   <img src="assets/preview/feilai-feiqu.gif" width="160" alt="飞来飞去" title="飞来飞去">
   <img src="assets/preview/tiaozhe-zou.gif" width="160" alt="跳着走" title="跳着走">
-  <img src="assets/preview/gulu-gulu-gundong.gif" width="160" alt="咕噜咕噜滚动" title="咕噜咕噜滚动">
   <img src="assets/preview/xiaosuibu-kuaipao.gif" width="160" alt="小碎步快跑" title="小碎步快跑">
   <img src="assets/preview/ceshen-huabu.gif" width="160" alt="侧身滑步" title="侧身滑步">
   <img src="assets/preview/yujian-feixing.gif" width="160" alt="御剑飞行" title="御剑飞行">

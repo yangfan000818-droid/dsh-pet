@@ -235,7 +235,6 @@
         { "name": "原地左转奔跑", "params": { "minDist": 120, "maxDist": 320, "leadSec": 1.75, "tailSec": 4.8 } },
         // 2026-11 新增：地面移动 10 秒素材，leadSec/tailSec 对准首尾站立段
         { "name": "跳着走", "params": { "minDist": 100, "maxDist": 300, "leadSec": 1.2, "tailSec": 1.2 } },
-        { "name": "咕噜咕噜滚动", "params": { "minDist": 180, "maxDist": 480, "leadSec": 1.5, "tailSec": 1.5 } },
         { "name": "小碎步快跑", "params": { "minDist": 160, "maxDist": 420, "leadSec": 1.2, "tailSec": 1.2, "rate": 1.15 } },
         { "name": "侧身滑步", "params": { "minDist": 160, "maxDist": 420, "leadSec": 1.3, "tailSec": 1.3 } },
         { "name": "骑自行车", "params": { "minDist": 200, "maxDist": 520, "leadSec": 1.5, "tailSec": 1.5, "rate": 1.1 } },

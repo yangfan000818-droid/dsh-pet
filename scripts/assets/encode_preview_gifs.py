@@ -46,7 +46,6 @@ PINYIN = {
     "原地左转奔跑": "yuandi-zuozhuan-benpao",
     "飞来飞去": "feilai-feiqu",
     "跳着走": "tiaozhe-zou",
-    "咕噜咕噜滚动": "gulu-gulu-gundong",
     "小碎步快跑": "xiaosuibu-kuaipao",
     "侧身滑步": "ceshen-huabu",
     "御剑飞行": "yujian-feixing",
