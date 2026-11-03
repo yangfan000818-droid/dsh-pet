@@ -271,7 +271,7 @@ export async function withFeatures(
     clicks?: string[];
     /** 修炼用注入的随机数（丹药等） */
     rng?: () => number;
-    /** 右键「动一动」随机飞 / 走用的随机数 */
+    /** 移动池随机（右键「动一动」、看屏幕后自动移动）用的随机数 */
     moveRng?: () => number;
     /** 启动前写进 cultivation.json 的存档（比如造一个快圆满的） */
     cultivation?: Record<string, unknown>;

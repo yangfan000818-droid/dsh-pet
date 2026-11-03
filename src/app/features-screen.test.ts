@@ -19,11 +19,31 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-/** 这套测试目录下宠物配置里的移动动作名（菜单随机池与配置同源） */
-function moveNames(home: string): string[] {
+/** 这套测试目录下宠物配置里的移动动作（菜单随机池、看屏幕后自动移动都与配置同源） */
+function moveEntries(home: string): Array<{ name: string; kind: 'fly' | 'walk' }> {
   const conf = findPetInstance(readAllConfig(configPathsFor(packageRoot, home)), 'main')?.conf;
-  const moves = (conf?.animations as { moves?: { actions?: Array<{ name?: unknown }> } } | undefined)?.moves;
-  return (moves?.actions ?? []).flatMap((action) => (typeof action?.name === 'string' ? [action.name] : []));
+  const moves = (
+    conf?.animations as
+      | {
+          moves?: {
+            default?: Record<string, unknown>;
+            actions?: Array<{ name?: unknown; params?: Record<string, unknown> }>;
+          };
+        }
+      | undefined
+  )?.moves;
+  const defaults = moves?.default ?? {};
+  return (moves?.actions ?? []).flatMap((action) => {
+    if (typeof action?.name !== 'string') return [];
+    const params = { ...defaults, ...(action.params ?? {}) };
+    const flying = params.teleport === true || Number(params.minRise) > 0 || Number(params.maxRise) > 0;
+    return [{ name: action.name, kind: flying ? ('fly' as const) : ('walk' as const) }];
+  });
+}
+
+/** 移动动作名（按配置顺序） */
+function moveNames(home: string): string[] {
+  return moveEntries(home).map((action) => action.name);
 }
 
 test('看屏幕：说出来了才算成功', async () => {
@@ -119,11 +139,16 @@ test('右键菜单：「动一动」排在看看我在干嘛和宠物日记下�
 test('看屏幕：接了 AI 就按看到的内容飞/走到九宫格选的位置', async () => {
   Object.assign(env, { moveAnswer: '飞6' });
   try {
-    await withFeatures({}, async (features, _said, _bodies, _home, { anims }) => {
+    // 随机数固定取池里第一个「飞」类动作：自动移动不能只认飞来飞去
+    await withFeatures({ moveRng: () => 0 }, async (features, _said, _bodies, home, { anims }) => {
       emitPetBounds({ x: 0, y: 0, marginL: 100, marginT: 100, size: 300, bottomPad: 0 });
       assert.deepEqual(await features.lookAtScreen(true), { ok: true, text: '主人在写代码呀' });
-      const move = anims.find((anim) => anim.name === '飞来飞去');
+      const flyNames = moveEntries(home)
+        .filter((action) => action.kind === 'fly')
+        .map((action) => action.name);
+      const move = anims.find((anim) => anim.target !== undefined);
       assert.ok(move, '应按 AI 选的位置飞过去');
+      assert.equal(move.name, flyNames[0], '自动移动要从移动池里按「飞」挑动作');
       const target = move.target as { x: number; y: number };
       assert.ok(target.x > 0.7 && target.x < 0.9, `x=${target.x}`);
       assert.ok(target.y > 0.35 && target.y < 0.65, `y=${target.y}`);

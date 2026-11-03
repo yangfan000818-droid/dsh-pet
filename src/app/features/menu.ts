@@ -1,6 +1,6 @@
-import { findPetInstance, readAllConfig } from '../../host/config';
 import { MENU_CULTIVATION_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
+import { moveActions, pickMoveAction } from './moves';
 import { delay, errorText } from './util';
 
 /** 右键菜单的 owner（插件按它归组、按它投递点击；helper 按它把这组项放根菜单，见 main.ts） */
@@ -19,12 +19,6 @@ export interface Menu {
   wantedLabels(): string[];
   refreshMenu(force?: boolean): Promise<void>;
   pollMenu(): Promise<void>;
-}
-
-/** 一个可点播的移动动作：动画名 + 给 AI 选位置时按飞 / 走哪一类提示 */
-interface MoveAction {
-  name: string;
-  kind: 'fly' | 'walk';
 }
 
 export function createMenu(ctx: FeatureContext): Menu {
@@ -94,50 +88,12 @@ export function createMenu(ctx: FeatureContext): Menu {
   }
 
   /**
-   * 移动点播池：直接读宠物配置的 `animations.moves.actions`（与自动漫游、渲染端同一份），
-   * 以后往配置里加移动素材，菜单自动跟着变。读不到时回落到内置的两项。
-   */
-  function moveActions(): MoveAction[] {
-    try {
-      const conf = findPetInstance(readAllConfig(deps.configPaths), petId())?.conf;
-      const animations = conf?.animations as
-        { moves?: { default?: Record<string, unknown>; actions?: Array<Record<string, unknown>> } } | undefined;
-      const moves = animations?.moves;
-      if (Array.isArray(moves?.actions)) {
-        const defaults = moves.default ?? {};
-        const list: MoveAction[] = [];
-        for (const action of moves.actions) {
-          const name = typeof action?.name === 'string' ? action.name : '';
-          if (!name) continue;
-          const params = {
-            ...defaults,
-            ...(action.params && typeof action.params === 'object' ? action.params : {}),
-          };
-          // 飞行类按配置的上下位移认；瞬移也是送到远处，AI 选位置时按 fly 提示
-          const flying = params.teleport === true || Number(params.minRise) > 0 || Number(params.maxRise) > 0;
-          list.push({ name, kind: flying ? 'fly' : 'walk' });
-        }
-        if (list.length > 0) return list;
-      }
-    } catch (error) {
-      log(`读移动动作池失败，按内置两项处理：${errorText(error)}`);
-    }
-    return [
-      { name: '螃蟹走路', kind: 'walk' },
-      { name: '飞来飞去', kind: 'fly' },
-    ];
-  }
-
-  /**
    * 点播移动动画：从移动池里随机挑一个。接了 AI 就先看屏幕挑个位置，用同一个动作过去；
    * AI 不可用或看不了时保持原来的随机移动。宿主按名字找到 moves 动作就边播边走，找不到只回 unknown-animation。
    */
   async function playMove(): Promise<void> {
-    const actions = moveActions();
-    const rng = deps.moveRng ?? Math.random;
-    // rng 理论上是 [0,1)；测试注入 1 时也落在最后一项，不越界
-    const index = Math.min(actions.length - 1, Math.max(0, Math.floor(rng() * actions.length)));
-    const action = actions[index];
+    const action = pickMoveAction(moveActions(deps.configPaths, petId(), log), deps.moveRng ?? Math.random);
+    if (!action) return;
     if (await moveWithAi(action.kind, action.name)) return;
     const result = await petRequest('POST', '/anim', { name: action.name });
     if (result.ok !== true) log(`点播「${action.name}」失败：${JSON.stringify(result)}`);

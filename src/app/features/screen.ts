@@ -6,6 +6,7 @@ import type { MoveKind } from '../move-target';
 import type { Rect } from '../../shared/types';
 import type { FeatureContext } from './context';
 import { lazyFns } from './context';
+import { moveActions, pickMoveAction } from './moves';
 import { LINE_RULE } from './speech';
 import { errorText } from './util';
 
@@ -128,10 +129,19 @@ export function createScreen(ctx: FeatureContext): Screen {
   }
 
   /**
+   * 看屏幕后自动移动用的动作：从移动池里按 AI 选的飞 / 走挑一个（不再固定成飞来飞去 / 螃蟹走路）。
+   * 池里没有这一类时回落到内置两项——名字不存在时宿主只回 unknown-animation，不会崩。
+   */
+  function autoMoveName(kind: MoveKind): string {
+    const action = pickMoveAction(moveActions(deps.configPaths, petId(), log), deps.moveRng ?? Math.random, kind);
+    return action?.name ?? (kind === 'fly' ? '飞来飞去' : '螃蟹走路');
+  }
+
+  /**
    * 用一张已经截好的屏幕图让 AI 选位置，并真的发 /anim（带 target）。
    * 独立于看屏幕的吐槽调用：同一个 prompt 里同时要台词和坐标会让小模型把两件事说串。
    * @param respectFixed 宠物固定时不动（看屏幕后自动移动用；菜单点播是主人明确要它走，照走）
-   * @param name 菜单指定的移动动作；不传时按目标远近在「飞来飞去 / 螃蟹走路」里二选一
+   * @param name 菜单指定的移动动作；不传时从移动池里按飞 / 走挑一个（挑不到才回落到飞来飞去 / 螃蟹走路）
    */
   async function askMoveTarget(
     image: string,
@@ -177,7 +187,7 @@ export function createScreen(ctx: FeatureContext): Screen {
       current,
     });
     if (!target) return false;
-    const animName = name ?? (target.kind === 'fly' ? '飞来飞去' : '螃蟹走路');
+    const animName = name ?? autoMoveName(target.kind);
     try {
       const result = await petRequest('POST', '/anim', { name: animName, target: { x: target.x, y: target.y } });
       if (result.ok !== true) {

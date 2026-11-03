@@ -471,7 +471,6 @@ cp step04/*.webm assets/webm/   # 播放格式（VP9-alpha）
   <img src="assets/preview/yujian-feixing.gif" width="160" alt="御剑飞行" title="御剑飞行">
   <img src="assets/preview/qijing-feixing.gif" width="160" alt="骑鲸飞行" title="骑鲸飞行">
   <img src="assets/preview/qi-zixingche.gif" width="160" alt="骑自行车" title="骑自行车">
-  <img src="assets/preview/huaban.gif" width="160" alt="滑板" title="滑板">
   <img src="assets/preview/taikongbu.gif" width="160" alt="太空步" title="太空步">
   <img src="assets/preview/lingbo-weibu.gif" width="160" alt="凌波微步" title="凌波微步">
   <img src="assets/preview/dundi.gif" width="160" alt="遁地" title="遁地">
@@ -527,6 +526,7 @@ cp step04/*.webm assets/webm/   # 播放格式（VP9-alpha）
   <img src="assets/preview/lu-mao.gif" width="160" alt="撸猫" title="撸猫">
   <img src="assets/preview/pingkong-shenghua.gif" width="160" alt="凭空生花" title="凭空生花">
   <img src="assets/preview/qi-muma.gif" width="160" alt="骑木马" title="骑木马">
+  <img src="assets/preview/huaban.gif" width="160" alt="滑板" title="滑板">
   <img src="assets/preview/sanqiu-paojie.gif" width="160" alt="三球抛接" title="三球抛接">
   <img src="assets/preview/ti-jianzi.gif" width="160" alt="踢毽子" title="踢毽子">
   <img src="assets/preview/xiawuziqi.gif" width="160" alt="下五子棋" title="下五子棋">
