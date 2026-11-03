@@ -172,6 +172,21 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
 
   return {
     activityContext: fns.activityContext,
+    // 对话专用的生活上下文：只喂 /chat，不改碎碎念/看屏幕的 prompt
+    chatContext() {
+      const now = Date.now();
+      const lines: string[] = [];
+      const events = diary.recentEvents(now, 3);
+      if (events.length > 0) lines.push('【最近的事】今天你陪主人时记下的：' + events.join('；') + '。');
+      const lastDiary = diary.lastDiaryLine(now, 100);
+      if (lastDiary) lines.push('【上次日记】' + lastDiary);
+      const nickname = deps.appConfig().visit.nickname.trim();
+      if (nickname) lines.push('【称呼】主人让你叫他「' + nickname + '」。');
+      if (lines.length > 0) {
+        lines.push('如果主人没话题，可以自然提一句上面的事或关心一下主人；不要每轮都提，也不要编造。');
+      }
+      return lines.join('\n');
+    },
     activity: () => tracker.snapshot(),
     async handleClaudeHook(payload: ClaudeHookPayload) {
       const speech = claude.handle(payload, Date.now());

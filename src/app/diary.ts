@@ -132,6 +132,31 @@ export class Diary {
     this.save(now);
   }
 
+  /** 今天最近记下的几件事（对话的生活上下文；按时间正序，最多 limit 条） */
+  recentEvents(now: number, limit = 3): string[] {
+    const date = diaryDate(now);
+    const day = date === this.day.date ? this.day : this.load(date);
+    if (!day) return [];
+    return day.events.slice(-Math.max(0, Math.floor(limit))).map((event) => event.text);
+  }
+
+  /**
+   * 最近一篇已写好的日记（不含今天）截断成一行，给对话当长期记忆。
+   * 只取历史日记正文，不读今天尚未写好的记录；没有日记时返回空串。
+   */
+  lastDiaryLine(now: number, maxChars = 100): string {
+    const today = diaryDate(now);
+    const latest = this.dates()
+      .filter((date) => date < today)
+      .pop();
+    if (!latest) return '';
+    const day = this.load(latest);
+    const text = day?.diary?.text.trim();
+    if (!text) return '';
+    const clipped = text.length > maxChars ? text.slice(0, maxChars) + '…' : text;
+    return `${dateLabel(latest)}：${clipped}`;
+  }
+
   /** 该补写日记的那一天：今天之前最近的一份记账，在电脑前够久，还没写过或只写了半天；没有则 null */
   pending(now: number): string | null {
     const today = diaryDate(now);

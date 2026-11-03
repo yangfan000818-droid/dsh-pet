@@ -1,21 +1,29 @@
-// 对话输入弹窗（src/shared，浏览器 bundle 与桌面 shared-core 共用）：
-//  - 纯逻辑：类型 / 发送（走 host /dsh-pet-7340/chat，host 是 memory.json 唯一读写方
-//    —— 浏览器与桌面同一实例天然共享同一份记忆，两端只是不同显示方式）；
+// 对话输入面板（src/shared，浏览器 bundle 与桌面 shared-core 共用）：
+//  - 纯逻辑：类型 / 发送 / 历史归一化（走 host /dsh-pet-7340/chat，host 是 memory.json 唯一读写方
+//    ——浏览器与桌面同一实例天然共享同一份记忆，两端只是不同显示方式）；
 //  - CHAT_CSS + mountChatDialog：自 menu.ts 之后第二个「两端共用同一份 DOM」例外
 //    （菜单组件证明可行的模式：浏览器页面与桌面透明窗渲染完全一致的对话框）。
-// 交互语义（与碎碎念同一显示效果，只多一步用户输入）：
-//    右键菜单「对话」→ 极简输入框 + 确认 → 点确认后弹窗消失 →
-//    桌宠把回复用碎碎念同款方式展示（说话动画 + 白色气泡 10s 消失）。
-//  **回复由 S 的 pets.<id>.say 带回展示**：POST /chat 成功时响应里也有正文
-//    （`{ok,text,image?}`，与写进叶子的同一份），但本组件**不用**它——回复统一走
-//    /state 轮询展示，onSent 只用来叫醒一拍，让结果 0 延迟可见（见各端实现）。
+// 交互语义：
+//    右键菜单「对话」→ 带最近几轮历史的输入面板 → 回车发送 → 面板里立即出现「你」和
+//    「……」，生成完成后替换成回复；面板保持打开，可以接着聊。
+//    桌宠仍会用碎碎念同款气泡展示同一句回复（回复由 host 写进 S 的 pets.<id>.say）。
+//    关闭（Esc / 点外）不会中止已发出的请求：回复仍写进 S，气泡照常出现。
 // 记忆语义：memory.json 全存不删；host 每次请求只截尾部 chatMemoryRounds 轮进上下文。
+// 本面板的历史来自 GET /chat（host 只读 memory.json），最多展示最近 CHAT_LOG_MAX 条。
 
-/** POST /dsh-pet-7340/chat?pet=<id> {text}：回执为 `{ok,text,image?}`；本类型只声明消费方
- *  用到的 `ok`（正文展示一律走 /state 的 pets.<id>.say） */
+/** POST /dsh-pet-7340/chat?pet=<id> {text} 的回执：成功时带回正文（与写进 S 的是同一份） */
 export type ChatSendState =
-  | { ok: true }
+  | { ok: true; text: string; image?: string }
   | { ok: false; reason: 'provider-missing' | 'generate-error' | 'config-error' | 'bad-request'; message?: string };
+
+/** 面板里展示的一条历史消息（GET /chat 的 messages 归一化后） */
+export interface ChatLogItem {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+/** 历史面板最多展示多少条（GET 可能返回很多轮，面板只保留最近这些） */
+export const CHAT_LOG_MAX = 20;
 
 const SEND_TIMEOUT_MS = 60_000; // 对话要等 LLM 生成回复，比碎碎念（30s）放宽一倍
 
@@ -41,15 +49,35 @@ export async function sendChat(baseUrl: string, text: string): Promise<ChatSendS
       message: typeof o.message === 'string' ? o.message : undefined,
     };
   }
-  return { ok: true };
+  return {
+    ok: true,
+    text: typeof o.text === 'string' ? o.text : '',
+    ...(typeof o.image === 'string' ? { image: o.image } : {}),
+  };
+}
+
+/** GET /chat 的回执归一化：只保留角色/正文合法的消息，空正文与非对象条目直接跳过。 */
+export function normalizeHistory(raw: unknown): ChatLogItem[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const o = raw as { ok?: unknown; messages?: unknown };
+  if (o.ok !== true || !Array.isArray(o.messages)) return [];
+  const out: ChatLogItem[] = [];
+  for (const item of o.messages) {
+    if (!item || typeof item !== 'object') continue;
+    const role = (item as { role?: unknown }).role;
+    const content = (item as { content?: unknown }).content;
+    if ((role === 'user' || role === 'assistant') && typeof content === 'string' && content.trim() !== '') {
+      out.push({ role, text: content });
+    }
+  }
+  return out.slice(-CHAT_LOG_MAX);
 }
 
 /** 弹窗样式 —— 两端注入同一份（与菜单 MENU_CSS 同理；视觉对齐浏览器/桌面）。
- *  最简形态：一条自适应输入框（无标题/无按钮）——初始小宽度（160px），
- *  随输入自动增宽（封顶 340px），到上限后自动折行增高；回车发送，Esc 或点外关闭。
- *  宽度由 JS 按文本测量覆盖根元素宽度。 */
+ *  面板 = 最近几轮历史（可滚动）+ 自适应输入框（初始小宽度，随输入自动增宽，封顶 340px）；
+ *  回车发送，Shift+回车换行，Esc 或点外关闭。宽度由 JS 按文本测量覆盖根元素宽度。 */
 export const CHAT_CSS = [
-  '.dsh-pet-chat{position:fixed;z-index:2147483001;width:160px;max-width:80vw;',
+  '.dsh-pet-chat{position:fixed;z-index:2147483001;width:200px;max-width:80vw;display:flex;flex-direction:column;',
   'background:rgba(255,255,255,.98);border:1px solid rgba(0,0,0,.12);border-radius:10px;',
   'box-shadow:0 10px 32px rgba(0,0,0,.22);color:#2b2b2b;font-size:14px;line-height:1.5;',
   // 字体与桌宠气泡同款（上首软糖体，两端均已注入 @font-face），风格一致不显正式。
@@ -59,6 +87,14 @@ export const CHAT_CSS = [
   "font-family:var(--dsh-pet-font-family,'ShangshouSoftCandy','Yuanti SC','YouYuan','幼圆','Comic Sans MS','PingFang SC','Microsoft YaHei',sans-serif);",
   'user-select:none}',
   '.dsh-pet-chat *{box-sizing:border-box}',
+  '.dsh-pet-chat-log{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto;',
+  'padding:9px 11px 0;scrollbar-width:thin}',
+  '.dsh-pet-chat-log:empty{display:none}',
+  '.dsh-pet-chat-msg{font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}',
+  '.dsh-pet-chat-msg[data-role="user"]{align-self:flex-end;max-width:85%;padding:4px 8px;border-radius:8px;',
+  'background:rgba(80,140,255,.12)}',
+  '.dsh-pet-chat-msg[data-role="assistant"]{align-self:flex-start;max-width:92%;color:#2b2b2b}',
+  '.dsh-pet-chat-msg[data-pending="true"]{opacity:.55}',
   '.dsh-pet-chat-input{display:block;width:100%;border:none;outline:none;background:transparent;',
   'padding:8px 11px 9px;font-size:14px;line-height:1.45;color:#2b2b2b;font-family:inherit;',
   'resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere}',
@@ -68,7 +104,7 @@ export const CHAT_CSS = [
 ].join('');
 
 /** 输入框宽度自适应参数：初始小宽 → 随文本增宽 → 封顶后折行增高 */
-const CHAT_MIN_W = 160;
+const CHAT_MIN_W = 200;
 const CHAT_MAX_W = 340;
 const CHAT_H_PAD = 22; // 输入框水平 padding（11×2），宽度测量补偿
 
@@ -91,10 +127,9 @@ export interface ChatDialogMount {
   close: () => void;
 }
 
-/** 挂载一个对话输入弹窗（两端共用；位置为视口坐标，超出 clamp 矩形自动夹回）。
- *  最简形态：只有一条输入框（无标题/无按钮），回车即发送 → 弹窗关闭 →
- *  onSent() 交给调用方叫醒一拍 /state（回复写进了 pets.<id>.say，气泡随下一拍出现）；
- *  Esc / 点弹窗外关闭；生成失败则留在弹窗内显式提示，不伪造回复。
+/** 挂载一个对话面板（两端共用；位置为视口坐标，超出 clamp 矩形自动夹回）。
+ *  面板打开时 GET /chat 拉最近几轮历史；回车发送后保持打开，回复直接追加到面板里
+ *  （同时 host 仍写 pets.<id>.say，气泡照常出现）；Esc / 点弹窗外关闭。
  *
  *  clamp（可选，#41）：弹窗允许占用的矩形（视口局部坐标，默认整个视口）。
  *  桌面模式传「窗口 ∩ 工作区」——宠物贴屏幕底/右时窗口外扩余量伸出屏幕，
@@ -105,8 +140,8 @@ export function mountChatDialog(opts: {
   baseUrl?: string;
   x: number;
   y: number;
-  /** 发送成功后调用（弹窗此时已关闭）：调用方叫醒一拍 /state 让回复 0 延迟出现。
-   *  回复本身不从这里回传——它走 S（动作端点不回数据，数据只有一个出口）。 */
+  /** 发送成功后调用：调用方叫醒一拍 /state 让气泡 0 延迟出现。
+   *  回复正文由本面板自己从 POST 回执显示；气泡仍走 S（动作端点不回数据，数据只有一个出口）。 */
   onSent?: () => void;
   onClose?: () => void;
   /** 弹窗允许占用的矩形（视口局部坐标）；缺省 = 整个视口 */
@@ -120,15 +155,31 @@ export function mountChatDialog(opts: {
     clamp && Number.isFinite(clamp.x + clamp.y + clamp.w + clamp.h)
       ? clamp
       : { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+  // 面板不能超出允许矩形（桌面窗口 = 宠物 + 外扩余量；贴屏边时余量会收缩）。
+  // 宽度按文本测量后再封顶到这里；高度超出时由日志区让位（见 reposition）。
+  const maxW = Math.max(0, c.w - 8);
+  const maxH = Math.max(0, c.h - 8);
 
   const root = document.createElement('div');
   root.className = 'dsh-pet-chat';
+
+  const log = document.createElement('div');
+  log.className = 'dsh-pet-chat-log';
 
   const input = document.createElement('textarea');
   input.className = 'dsh-pet-chat-input';
   input.placeholder = '说点什么…';
   input.maxLength = 2000;
   input.rows = 1;
+
+  const err = document.createElement('div');
+  err.className = 'dsh-pet-chat-err';
+  err.style.display = 'none';
+
+  root.appendChild(log);
+  root.appendChild(input);
+  root.appendChild(err);
+  document.body.appendChild(root);
 
   // 宽度/高度自适应：宽度按文本测量（≤CHAT_MAX_W），封顶后高度随折行增长
   let measureCtx: CanvasRenderingContext2D | null = null;
@@ -140,27 +191,33 @@ export function mountChatDialog(opts: {
   };
   const resizeInput = (): void => {
     const textW = measureText(input.value || ' ');
-    const w = Math.max(CHAT_MIN_W, Math.min(Math.ceil(textW + CHAT_H_PAD), CHAT_MAX_W));
-    root.style.width = w + 'px'; // 根宽度跟随（含 err 行）→ 夹回仍按实际宽
+    const minW = Math.min(CHAT_MIN_W, maxW);
+    const w = Math.max(minW, Math.min(Math.ceil(textW + CHAT_H_PAD), CHAT_MAX_W, maxW));
+    root.style.width = w + 'px'; // 根宽度跟随（含历史/err 行）→ 夹回仍按实际宽
     input.style.height = 'auto';
     input.style.height = Math.max(input.scrollHeight, 22) + 'px';
   };
   input.addEventListener('input', resizeInput);
   resizeInput(); // 以占位符为初始宽度
 
-  const err = document.createElement('div');
-  err.className = 'dsh-pet-chat-err';
-  err.style.display = 'none';
-
-  root.appendChild(input);
-  root.appendChild(err);
-  document.body.appendChild(root);
-
-  // 位置：以 (x,y) 落点，超出 clamp 矩形夹回
+  // 位置：以 (x,y) 落点，超出 clamp 矩形夹回；历史渲染后高度变化时重新夹一次。
+  // 高度放不下时先压历史区：输入框永远完整可见（正在输入的东西不能被窗口裁掉）。
+  const reposition = (): void => {
+    log.style.maxHeight = ''; // 先恢复 CSS 上限，再按可用高度收紧
+    const first = root.getBoundingClientRect();
+    const overflow = first.height - maxH;
+    if (overflow > 0) {
+      const logH = log.getBoundingClientRect().height;
+      if (logH > 0) log.style.maxHeight = Math.max(0, logH - overflow) + 'px';
+    }
+    const rr = root.getBoundingClientRect();
+    root.style.left = Math.max(c.x + 4, Math.min(x, c.x + c.w - rr.width - 4)) + 'px';
+    root.style.top = Math.max(c.y + 4, Math.min(y, c.y + c.h - rr.height - 4)) + 'px';
+  };
   resizeInput(); // append 后再量一次（此时样式已生效）
-  const rr = root.getBoundingClientRect();
-  root.style.left = Math.max(c.x + 4, Math.min(x, c.x + c.w - rr.width - 4)) + 'px';
-  root.style.top = Math.max(c.y + 4, Math.min(y, c.y + c.h - rr.height - 4)) + 'px';
+  reposition();
+  // 输入变长 → 面板变高：重新夹回（否则贴窗口底边时会被裁掉）
+  input.addEventListener('input', () => reposition());
 
   let closed = false;
   let sending = false;
@@ -185,25 +242,75 @@ export function mountChatDialog(opts: {
   document.addEventListener('mousedown', onDocPointerDown, true);
   document.addEventListener('keydown', onDocKeyDown, true);
 
+  const appendMessage = (role: ChatLogItem['role'], text: string, pending = false): HTMLElement => {
+    const el = document.createElement('div');
+    el.className = 'dsh-pet-chat-msg';
+    el.dataset.role = role;
+    if (pending) el.dataset.pending = 'true';
+    el.textContent = text;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+    return el;
+  };
+
+  // 历史：GET /chat（host 只读 memory.json，按轮数截尾）。读不到就不显示，不挡发送。
+  // 面板展示 20 条（CHAT_LOG_MAX）→ 向 host 要 10 轮（1 轮 = 1 问 1 答）。
+  const readUrl = withPet + '&rounds=' + Math.ceil(CHAT_LOG_MAX / 2);
+  fetch(readUrl, { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'error' })
+    .then((response) => response.json())
+    .then((raw: unknown) => {
+      if (closed || log.childElementCount > 0) return; // 用户已经先发了：不把历史插到后面
+      const items = normalizeHistory(raw);
+      if (items.length === 0) return;
+      for (const item of items) appendMessage(item.role, item.text);
+      reposition();
+    })
+    .catch(() => {
+      /* 历史读不到不影响发送 */
+    });
+
   const doSend = (): void => {
     if (closed || sending) return;
     const text = input.value.trim();
     if (!text) return;
     sending = true;
     input.disabled = true;
+    err.style.display = 'none';
+    input.value = '';
+    resizeInput();
+    const userEl = appendMessage('user', text);
+    const pendingEl = appendMessage('assistant', '……', true);
+    reposition();
     sendChat(withPet, text)
       .then((state) => {
         if (state.ok) {
-          close();
+          // 成功：替换占位，面板保持打开；气泡仍由 S 带出（onSent 叫醒一拍）
+          if (pendingEl.isConnected) {
+            delete pendingEl.dataset.pending;
+            pendingEl.textContent = state.text || '（没有回复）';
+          }
+          log.scrollTop = log.scrollHeight;
+          reposition();
           if (onSent) onSent();
         } else {
+          // 失败：host 没写记忆，撤掉本地这两条，把文本放回输入框方便重试
+          userEl.remove();
+          pendingEl.remove();
+          input.value = text;
+          resizeInput();
           err.textContent = '对话失败：' + (state.message ?? state.reason);
           err.style.display = 'block';
+          reposition();
         }
       })
       .catch((e) => {
+        userEl.remove();
+        pendingEl.remove();
+        input.value = text;
+        resizeInput();
         err.textContent = '对话异常：' + String(e && e.message ? e.message : e);
         err.style.display = 'block';
+        reposition();
       })
       .finally(() => {
         sending = false;
@@ -211,8 +318,10 @@ export function mountChatDialog(opts: {
         if (!closed) input.focus();
       });
   };
+
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    // Enter 发送；Shift+Enter 换行；输入法正在上屏时不抢 Enter
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       doSend();
     }

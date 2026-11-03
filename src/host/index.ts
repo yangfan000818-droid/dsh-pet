@@ -81,7 +81,7 @@ import { homedir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateWhisper } from './whisper';
-import { generateChat, type ChatMemoryMessage } from './chat';
+import { chatGapLine, composeChatSystem, generateChat, recentChatImages, type ChatMemoryMessage } from './chat';
 import { type ModelService } from './model-selection';
 import { limitPool, pickMeme, readMemePool } from './memes';
 import {
@@ -248,6 +248,8 @@ export interface PetHostDeps {
   ai: PetHostAi;
   /** 拼人设时追加的「主人此刻」背景（应用 ready 前为空） */
   appContext?: () => string;
+  /** 对话专用的生活上下文（最近的事 / 称呼 / 上次日记；应用 ready 前为空） */
+  chatContext?: () => string;
   /** 宠物数量 / size / 托盘配置变化后，由应用决定是否整体重启 */
   desktopChanged?: () => void;
 }
@@ -261,7 +263,7 @@ export interface PetHost {
 
 /** 宿主主体：处理 `/dsh-pet-7340` 前缀下的全部业务路由。 */
 export function createPetHost(deps: PetHostDeps): PetHost {
-  const { logger, ai, appContext, desktopChanged } = deps;
+  const { logger, ai, appContext, chatContext, desktopChanged } = deps;
   // 用户数据根：配置与用户素材统一收敛于此（扩展包按 <插件id> 各自建目录）
   const dshHome = dshHomeDir();
   const userRoot = join(dshHome, 'dsh-pet');
@@ -591,8 +593,6 @@ export function createPetHost(deps: PetHostDeps): PetHost {
       // 分桶，外加一只幽灵叶子（/state 里常驻到进程重启）。
       if (!found) return { ok: false, reason: 'unknown-pet', message: '没有这只桌宠：' + petId };
       const rounds = memoryRounds(found.conf);
-      // 人设：实例级 whisperPrompt 优先，没写回落所属条目（与碎碎念同一拼装）
-      const system = petSystemPrompt(found);
       // 配图：开关关闭 → 空池（指令与解析都不介入，与旧行为逐字一致）；目录链按所属条目取。
       // 张数上限（chatImageLimit，0 = 不限制）：整张清单每条消息都要附，截断后费用上限可控。
       const pool =
@@ -605,13 +605,28 @@ export function createPetHost(deps: PetHostDeps): PetHost {
       // rounds = 0（用户关掉历史）→ 空历史；否则截尾部 rounds 轮（1 轮 = 1 问 1 答）。
       // 不能写 slice(-rounds * 2)：-0 在 JS 里 === 0，slice(-0) 返回整个数组而不是空。
       const list = sliceMemoryRounds(entry.messages, rounds);
+      // system：人设（含名字/时间/主人此刻）+ 上次对话间隔 + 生活上下文 + 对话专用规则。
+      // 人设仍与碎碎念共用；对话规则只在 chat 路径追加（persona.ts 的三段拼装不动）。
+      const system = composeChatSystem(
+        petSystemPrompt(found),
+        [chatGapLine(list[list.length - 1]?.ts, Date.now()), chatContext?.() ?? '']
+          .filter((part) => part !== '')
+          .join('\n'),
+      );
+      // 配图去重：最近几轮用过的图随指令带给模型（只提醒，不强制）
+      const recentImages = recentChatImages(list);
       // 模型：设置页配的那一个（独立应用没有第二条模型来源）
-      const generated = await generateChat(ai, system, list, text, pool);
+      const generated = await generateChat(ai, system, list, text, pool, recentImages);
       if (!generated.ok) return generated;
       const now = Date.now();
       entry.messages.push({ role: 'user', content: text, ts: now });
-      // 记忆只存正文（配图属展示层，不进上下文——否则下次请求会把标记当历史读回去）
-      entry.messages.push({ role: 'assistant', content: generated.text, ts: now });
+      // 记忆存正文 + 实际配图名（配图标记本身不存，下一轮靠 image 字段去重）
+      entry.messages.push({
+        role: 'assistant',
+        content: generated.text,
+        ts: now,
+        ...(generated.image ? { image: generated.image } : {}),
+      });
       await writeMemory(mem);
       // 回复写进 S（与碎碎念同一个叶子：前端本来就是同一条展示链路）
       state.writePet(

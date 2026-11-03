@@ -64,6 +64,8 @@ export interface FeatureElectron {
 export interface AppFeatures {
   /** 给插件人设拼装用的「主人此刻」一行（ctx.dshPetAppContext） */
   activityContext(): string;
+  /** 对话专用的生活上下文：最近的事 / 上次日记 / 称呼（只给 /chat 用，不进碎碎念） */
+  chatContext(): string;
   activity(): ActivitySnapshot | null;
   handleClaudeHook(payload: ClaudeHookPayload): Promise<void>;
   /** 让桌宠直接说一句给定的话 */

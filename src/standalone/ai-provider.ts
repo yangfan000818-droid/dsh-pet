@@ -32,6 +32,11 @@ const inputSchema = z.object({
   system: z.string().max(MAX_INPUT_CHARS).optional(),
   messages: z.array(messageSchema).min(1).max(64),
   signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  // 采样参数：只给对话这类需要控重复的调用方用；未传就不发，沿用服务端默认。
+  temperature: z.number().min(0).max(2).optional(),
+  topP: z.number().min(0).max(1).optional(),
+  presencePenalty: z.number().min(-2).max(2).optional(),
+  frequencyPenalty: z.number().min(-2).max(2).optional(),
 });
 
 export interface StandaloneAiService {
@@ -113,7 +118,17 @@ function parseRequest(options: unknown, model: string): { request: AiRequest; si
   ) {
     throw new Error('Standalone AI input is empty or exceeds limits.');
   }
-  return { request: { system, messages }, signal: data.signal };
+  return {
+    request: {
+      system,
+      messages,
+      ...(data.temperature !== undefined ? { temperature: data.temperature } : {}),
+      ...(data.topP !== undefined ? { topP: data.topP } : {}),
+      ...(data.presencePenalty !== undefined ? { presencePenalty: data.presencePenalty } : {}),
+      ...(data.frequencyPenalty !== undefined ? { frequencyPenalty: data.frequencyPenalty } : {}),
+    },
+    signal: data.signal,
+  };
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {

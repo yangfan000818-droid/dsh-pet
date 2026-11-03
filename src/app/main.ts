@@ -42,7 +42,13 @@ import { settingsHandler, testHandler } from '../standalone/server';
 import { settingsPage, settingsScript, settingsStyle } from '../standalone/settings-page';
 import type { StandaloneAiService } from '../standalone/ai-provider';
 import { createAppConfig } from './app-config';
-import { appCultivationHandler, appNeighborsHandler, appSettingsHandler, createAppRoutes, petSettingsHandler } from './app-routes';
+import {
+  appCultivationHandler,
+  appNeighborsHandler,
+  appSettingsHandler,
+  createAppRoutes,
+  petSettingsHandler,
+} from './app-routes';
 import { removeDiscovery, writeDiscovery } from './discovery';
 import { MENU_OWNER, startAppFeatures } from './features';
 import type { AppFeatures, FeatureElectron } from './features';
@@ -136,6 +142,7 @@ async function boot(): Promise<void> {
     ai,
     // 拼人设时追加「主人此刻」一行（宿主 petSystemPrompt 读这个钩子）
     appContext: () => features?.activityContext() ?? '',
+    chatContext: () => features?.chatContext() ?? '',
     desktopChanged: () => {
       const layout = desktopLayout();
       if (relaunching || layout === null || layout === launchedLayout) return;

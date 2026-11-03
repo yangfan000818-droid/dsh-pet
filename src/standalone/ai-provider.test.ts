@@ -97,6 +97,35 @@ test('official OpenAI SDK extracts fragmented text once, maps text history and p
   }
 });
 
+test('sampling parameters reach the OpenAI request only when the caller provides them', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  await fixture(
+    async (ai) => {
+      await ai.saveSettings(config);
+      assert.equal(await collect(ai.stream(options)), 'ok');
+      assert.equal(
+        await collect(
+          ai.stream({ ...options, temperature: 1, topP: 0.9, presencePenalty: 0.1, frequencyPenalty: 0.2 }),
+        ),
+        'ok',
+      );
+    },
+    async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return openAiResponse('ok');
+    },
+  );
+  // 未给 → 不发（沿用服务端默认）
+  for (const key of ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']) {
+    assert.equal(key in bodies[0], false);
+  }
+  // 给了 → 原值透传
+  assert.equal(bodies[1].temperature, 1);
+  assert.equal(bodies[1].top_p, 0.9);
+  assert.equal(bodies[1].presence_penalty, 0.1);
+  assert.equal(bodies[1].frequency_penalty, 0.2);
+});
+
 async function fixture(
   run: (ai: ReturnType<typeof createStandaloneAi>, home: string) => Promise<void>,
   fetcher: typeof fetch,

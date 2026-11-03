@@ -12,6 +12,11 @@ export interface AiRequest {
   messages: AiTextMessage[];
   /** 附在最后一条用户消息上的图片（data URL）；两种协议都支持 */
   images?: string[];
+  /** 采样参数（可选；当前只在 OpenAI 兼容分支发送，Anthropic 分支保持原样） */
+  temperature?: number;
+  topP?: number;
+  presencePenalty?: number;
+  frequencyPenalty?: number;
 }
 export type AiTransportEvent = { text?: string; refusal?: boolean };
 /** 单次输出上限：桌宠每句话只有二十来字，只在模型跑飞（复读停不下来）时兜底 */
@@ -101,8 +106,15 @@ export async function* sdkTextStream(
     ];
     // chat_template_kwargs 不在 OpenAI 类型里，SDK 会原样透传进请求体；官方 OpenAI 会拒收未知参数，所以只按设置开启
     const thinking = settings.disableThinking ? { chat_template_kwargs: { enable_thinking: false } } : {};
+    // 采样参数由调用方按场景给（目前只有对话给轻量反重复值）；未给就不发，沿用服务端默认。
+    const sampling = {
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(request.topP !== undefined ? { top_p: request.topP } : {}),
+      ...(request.presencePenalty !== undefined ? { presence_penalty: request.presencePenalty } : {}),
+      ...(request.frequencyPenalty !== undefined ? { frequency_penalty: request.frequencyPenalty } : {}),
+    };
     const stream = await client.chat.completions.create(
-      { model: settings.model, messages, stream: true, max_tokens: maxTokens, n: 1, ...thinking },
+      { model: settings.model, messages, stream: true, max_tokens: maxTokens, n: 1, ...sampling, ...thinking },
       { signal },
     );
     for await (const event of stream) {
