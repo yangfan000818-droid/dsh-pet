@@ -278,6 +278,16 @@ test(
           }),
         );
         assert.equal(await page.evaluate('sprites[0].chatOpen'), true);
+        // 宠物贴屏边时窗口会随余量收缩：面板要按新视口重新落位，右侧不能被窗口裁掉
+        await app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows().find((w) => !w.webContents.getURL().includes('menu.html'));
+          win?.setContentSize(260, 240);
+        });
+        await assertEventually(async () => {
+          const box = await page.locator('.dsh-pet-chat').boundingBox();
+          const width = await page.evaluate('innerWidth');
+          return !!box && box.x >= 0 && box.x + box.width <= width + 0.5;
+        });
         await page.evaluate('sprites[0].chatClose()');
         assert.equal(await page.evaluate('sprites[0].inputBusy()'), false);
       });

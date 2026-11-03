@@ -157,8 +157,20 @@ export function mountChatDialog(opts: {
       : { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
   // 面板不能超出允许矩形（桌面窗口 = 宠物 + 外扩余量；贴屏边时余量会收缩）。
   // 宽度按文本测量后再封顶到这里；高度超出时由日志区让位（见 reposition）。
-  const maxW = Math.max(0, c.w - 8);
-  const maxH = Math.max(0, c.h - 8);
+  // 窗口会随宠物移动而收缩（桌面 setContentBounds），所以上限每次落位时按**当前视口**重算。
+  let maxW = Math.max(0, c.w - 8);
+  let maxH = Math.max(0, c.h - 8);
+  /** clamp 矩形与当前视口的交集（窗口收缩后 c 可能已超出视口） */
+  const liveRect = (): { x: number; y: number; w: number; h: number } => {
+    const x0 = Math.max(c.x, 0);
+    const y0 = Math.max(c.y, 0);
+    return {
+      x: x0,
+      y: y0,
+      w: Math.max(0, Math.min(c.x + c.w, window.innerWidth) - x0),
+      h: Math.max(0, Math.min(c.y + c.h, window.innerHeight) - y0),
+    };
+  };
 
   const root = document.createElement('div');
   root.className = 'dsh-pet-chat';
@@ -203,6 +215,8 @@ export function mountChatDialog(opts: {
   // 位置：以 (x,y) 落点，超出 clamp 矩形夹回；历史渲染后高度变化时重新夹一次。
   // 高度放不下时先压历史区：输入框永远完整可见（正在输入的东西不能被窗口裁掉）。
   const reposition = (): void => {
+    const r = liveRect();
+    maxH = Math.max(0, r.h - 8);
     log.style.maxHeight = ''; // 先恢复 CSS 上限，再按可用高度收紧
     const first = root.getBoundingClientRect();
     const overflow = first.height - maxH;
@@ -211,13 +225,20 @@ export function mountChatDialog(opts: {
       if (logH > 0) log.style.maxHeight = Math.max(0, logH - overflow) + 'px';
     }
     const rr = root.getBoundingClientRect();
-    root.style.left = Math.max(c.x + 4, Math.min(x, c.x + c.w - rr.width - 4)) + 'px';
-    root.style.top = Math.max(c.y + 4, Math.min(y, c.y + c.h - rr.height - 4)) + 'px';
+    root.style.left = Math.max(r.x + 4, Math.min(x, r.x + r.w - rr.width - 4)) + 'px';
+    root.style.top = Math.max(r.y + 4, Math.min(y, r.y + r.h - rr.height - 4)) + 'px';
   };
   resizeInput(); // append 后再量一次（此时样式已生效）
   reposition();
   // 输入变长 → 面板变高：重新夹回（否则贴窗口底边时会被裁掉）
   input.addEventListener('input', () => reposition());
+  // 桌面窗口随宠物贴屏边而收缩：按新视口重算宽度上限并重新落位（否则右侧被窗口裁掉）
+  const onWindowResize = (): void => {
+    maxW = Math.max(0, liveRect().w - 8);
+    resizeInput();
+    reposition();
+  };
+  window.addEventListener('resize', onWindowResize);
 
   let closed = false;
   let sending = false;
@@ -227,6 +248,7 @@ export function mountChatDialog(opts: {
     closed = true;
     document.removeEventListener('mousedown', onDocPointerDown, true);
     document.removeEventListener('keydown', onDocKeyDown, true);
+    window.removeEventListener('resize', onWindowResize);
     root.remove();
     if (onClose) onClose();
   };
