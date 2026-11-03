@@ -46,6 +46,7 @@ import { watchHomePet } from './visit-windows';
 import { createAdventureGlue } from './features/adventure-glue';
 import { createBrawl } from './features/brawl';
 import { createBrawlLiveFeature } from './features/brawl-live';
+import { createBond } from './features/bond';
 import type { AppFeatures, FeatureContext, FeatureDeps, FeatureState, FeatureFunctions } from './features/context';
 import { createDiaryGlue } from './features/diary-glue';
 import { createDuel } from './features/duel';
@@ -149,6 +150,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
   // 入口先把上下文建好，再把各块的函数挂上去；块与块之间经 ctx.fns 调，不互相 import
   Object.assign(fns, createPetIo(ctx));
   Object.assign(fns, createSpeech(ctx));
+  Object.assign(fns, createBond(ctx));
   Object.assign(fns, createScreen(ctx));
   Object.assign(fns, createTicks(ctx));
   Object.assign(fns, createDiaryGlue(ctx));
@@ -182,6 +184,8 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
       if (lastDiary) lines.push('【上次日记】' + lastDiary);
       const nickname = deps.appConfig().visit.nickname.trim();
       if (nickname) lines.push('【称呼】主人让你叫他「' + nickname + '」。');
+      const bond = fns.bondContext();
+      if (bond) lines.push(bond);
       if (lines.length > 0) {
         lines.push('如果主人没话题，可以自然提一句上面的事或关心一下主人；不要每轮都提，也不要编造。');
       }
@@ -208,6 +212,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
       }
     },
     say: fns.say,
+    onChat: fns.onChat,
     whisper: () => fns.petRequest('POST', '/whisper'),
     lookAtScreen: fns.lookAtScreen,
     neighbors: {
@@ -241,6 +246,7 @@ export function startAppFeatures(deps: FeatureDeps): AppFeatures {
     dispose() {
       state.disposed = true;
       if (state.tickTimer !== null) clearTimeout(state.tickTimer);
+      fns.disposeBond();
       noteOpener.dispose();
       // 正在切磋：定时器、擂台、演出（或转播）都收掉
       fns.cancelSpar();

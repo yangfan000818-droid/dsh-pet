@@ -28,6 +28,7 @@ export interface Trial {
 
 export function createTrial(ctx: FeatureContext): Trial {
   const {
+    bondReward,
     compose,
     cultivationOn,
     holdPet,
@@ -240,6 +241,7 @@ export function createTrial(ctx: FeatureContext): Trial {
     const suffix = mode === 'ai' ? '（AI 出招）' : mode === 'manual' ? '（手动）' : '';
     // 奖励（修为进账、掉法宝、战绩都在 trialDone 里；冒泡与日记在 onCultivation）
     onCultivation(Date.now(), practice.trialDone(Date.now(), won), { anim: false });
+    if (won) bondReward('battle');
     diary.note(
       Date.now(),
       'cultivate',

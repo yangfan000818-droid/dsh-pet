@@ -66,6 +66,8 @@ export interface AppFeatures {
   activityContext(): string;
   /** 对话专用的生活上下文：最近的事 / 上次日记 / 称呼（只给 /chat 用，不进碎碎念） */
   chatContext(): string;
+  /** 一次成功对话的回调（host 的 chatWithPet 调；羁绊记好感用，报错不影响回复） */
+  onChat(petId: string, text: string): void;
   activity(): ActivitySnapshot | null;
   handleClaudeHook(payload: ClaudeHookPayload): Promise<void>;
   /** 让桌宠直接说一句给定的话 */
@@ -107,6 +109,8 @@ export interface FeatureDeps {
   neighborsPath: string;
   /** 修炼存档（$DSH_HOME/dsh-pet/cultivation.json）；开关关着时不碰它 */
   cultivationPath: string;
+  /** 羁绊存档（$DSH_HOME/dsh-pet/bond.json）：好感、阶段、看过的小剧场、跟班开关 */
+  bondPath: string;
   /** 修炼用的随机数（丹药、成长随机项）；只给测试注入固定序列用，平时不传 */
   cultivationRng?: () => number;
   /** 切磋等客人应战 / 亮随机数的时限（默认 30 秒，超时按客人认输）；只给测试调短用 */
@@ -519,6 +523,13 @@ export interface FeatureFunctions {
   brawlLobby(): { players: Array<{ id: number; name: string }> } | null;
   /** 收掉联机的桌（应用退出时） */
   closeBrawlLive(): void;
+  /** 羁绊：菜单文案（有待演小剧场时带「有话想说」）、打开小窗、对话上下文、好感来源、退出收摊 */
+  bondMenuLabel(): string;
+  openBond(): Promise<void>;
+  bondContext(): string;
+  onChat(petId: string, text: string): void;
+  bondReward(kind: 'battle' | 'visit'): void;
+  disposeBond(): void;
   wantedLabels(): string[];
   refreshMenu(force?: boolean): Promise<void>;
   pollMenu(): Promise<void>;

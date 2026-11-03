@@ -250,6 +250,8 @@ export interface PetHostDeps {
   appContext?: () => string;
   /** 对话专用的生活上下文（最近的事 / 称呼 / 上次日记；应用 ready 前为空） */
   chatContext?: () => string;
+  /** 一次成功对话的回调（羁绊记好感用；抛错只记日志，不影响回复） */
+  onChat?: (petId: string, text: string) => void;
   /** 宠物数量 / size / 托盘配置变化后，由应用决定是否整体重启 */
   desktopChanged?: () => void;
 }
@@ -263,7 +265,7 @@ export interface PetHost {
 
 /** 宿主主体：处理 `/dsh-pet-7340` 前缀下的全部业务路由。 */
 export function createPetHost(deps: PetHostDeps): PetHost {
-  const { logger, ai, appContext, chatContext, desktopChanged } = deps;
+  const { logger, ai, appContext, chatContext, onChat, desktopChanged } = deps;
   // 用户数据根：配置与用户素材统一收敛于此（扩展包按 <插件id> 各自建目录）
   const dshHome = dshHomeDir();
   const userRoot = join(dshHome, 'dsh-pet');
@@ -634,6 +636,12 @@ export function createPetHost(deps: PetHostDeps): PetHost {
         'say',
         generated.image ? { text: generated.text, image: generated.image } : { text: generated.text },
       );
+      // 对话已经完整落地（记忆 + 气泡）再通知功能层：羁绊记好感，失败只记日志
+      try {
+        onChat?.(petId, text);
+      } catch (error) {
+        logger.warn(`[dsh-pet] 对话回调失败：${error instanceof Error ? error.message : String(error)}`);
+      }
       // 同一份文本随返回值带出（叶子照写，不是二选一）
       return { ok: true as const, text: generated.text, ...(generated.image ? { image: generated.image } : {}) };
     });

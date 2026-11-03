@@ -364,6 +364,7 @@ export async function withFeatures(
     identityPath: join(home, 'visit-identity.json'),
     neighborsPath: join(home, 'neighbors.json'),
     cultivationPath: join(home, 'cultivation.json'),
+    bondPath: join(home, 'bond.json'),
     cultivationRng: options.rng,
     sparWaitMs: options.sparWaitMs,
     modeTimeoutMs: options.modeTimeoutMs,

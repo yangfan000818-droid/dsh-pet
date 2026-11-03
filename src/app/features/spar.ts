@@ -111,6 +111,7 @@ export interface Spar {
 
 export function createSpar(ctx: FeatureContext): Spar {
   const {
+    bondReward,
     cancelDuels,
     comeHome,
     compose,
@@ -549,6 +550,7 @@ export function createSpar(ctx: FeatureContext): Spar {
     if (practice && visitor.id) {
       onCultivation(Date.now(), practice.sparDone(Date.now(), visitor.id, true), { anim: false });
       neighbors.recordSpar(visitor.id, true);
+      bondReward('battle');
     }
     diary.note(Date.now(), 'cultivate', `和 ${visitor.owner} 家的 ${visitor.pet} 切磋，它${why}，算它认输`);
     void say(`${visitor.pet} ${why}，这场算它认输啦～`, { anim: false });
@@ -639,6 +641,7 @@ export function createSpar(ctx: FeatureContext): Spar {
     const farewell = end.kind === 'end' && end.reason === 'farewell';
     onCultivation(Date.now(), practice.sparDone(Date.now(), visitorId, won), { anim: false });
     neighbors.recordSpar(visitorId, won);
+    if (won) bondReward('battle');
     diary.note(
       Date.now(),
       'cultivate',
@@ -688,6 +691,7 @@ export function createSpar(ctx: FeatureContext): Spar {
     // 记账：修为进账、战绩、邻居簿、日记（冒泡的 anim 一律 false，演出马上开场）
     onCultivation(Date.now(), practice.sparDone(Date.now(), visitor.id, won), { anim: false });
     neighbors.recordSpar(visitor.id, won);
+    if (won) bondReward('battle');
     diary.note(
       Date.now(),
       'cultivate',
@@ -905,6 +909,7 @@ export function createSpar(ctx: FeatureContext): Spar {
       // 记账（对面同时也在记它的）：修为进账、战绩、日记
       onCultivationRelayed(Date.now(), practice.sparDone(Date.now(), current.host.id, won));
       if (current.verified) neighbors.recordSpar(current.host.id, won);
+      if (won) bondReward('battle');
       diary.note(
         Date.now(),
         'cultivate',

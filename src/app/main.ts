@@ -143,6 +143,7 @@ async function boot(): Promise<void> {
     // 拼人设时追加「主人此刻」一行（宿主 petSystemPrompt 读这个钩子）
     appContext: () => features?.activityContext() ?? '',
     chatContext: () => features?.chatContext() ?? '',
+    onChat: (petId, text) => features?.onChat(petId, text),
     desktopChanged: () => {
       const layout = desktopLayout();
       if (relaunching || layout === null || layout === launchedLayout) return;
@@ -206,6 +207,7 @@ async function boot(): Promise<void> {
       identityPath: join(home, 'dsh-pet', 'visit-identity.json'),
       neighborsPath: join(home, 'dsh-pet', 'neighbors.json'),
       cultivationPath: join(home, 'dsh-pet', 'cultivation.json'),
+      bondPath: join(home, 'dsh-pet', 'bond.json'),
       petBase: `${origin}/dsh-pet-7340`,
       log,
     });

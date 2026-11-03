@@ -6,11 +6,13 @@ import { delay, errorText } from './util';
 export const MENU_OWNER = 'dsh-pet-app';
 const MENU_LOOK = '看看我在干嘛';
 const MENU_DIARY = '宠物日记';
+/** 羁绊小窗：有待演的小剧场时，bondMenuLabel() 会变成「羁绊 · 有话想说」 */
+const MENU_BOND = '羁绊';
 /** 两个常驻的移动点播：点了就按动作池里的同名素材走 / 飞一段（不在池里时宿主不播，只记日志） */
 const MENU_FLY = '飞来飞去';
 const MENU_WALK = '走两步';
 /** 宿主每个 owner 的菜单项上限（src/host/menu.ts 的 ITEMS_MAX，`>` 才拒） */
-const MENU_ITEMS_MAX = 20;
+const MENU_ITEMS_MAX = 24;
 
 /** 右键菜单：要注册的项、注册队列、点击 */
 export interface Menu {
@@ -21,9 +23,11 @@ export interface Menu {
 
 export function createMenu(ctx: FeatureContext): Menu {
   const {
+    bondMenuLabel,
     brawlActions,
     brawlLiveActions,
     cultivationActions,
+    openBond,
     duelChallengeActions,
     lookAtScreen,
     moveWithAi,
@@ -35,8 +39,8 @@ export function createMenu(ctx: FeatureContext): Menu {
   } = lazyFns(ctx);
   const { deps, log } = ctx;
   /**
-   * 要注册的菜单项。宿主每个 owner 最多 20 项（`>` 就整份拒了，菜单从此不再更新），
-   * 所以这里按优先级兜底截断：固定的四项（看屏幕、日记、飞来飞去、走两步）+ 修炼（最多 4：信息、渡劫、服丹后渡劫、领悟×2 中的一种组合）
+   * 要注册的菜单项。宿主每个 owner 最多 24 项（`>` 就整份拒了，菜单从此不再更新），
+   * 所以这里按优先级兜底截断：固定的五项（看屏幕、日记、飞来飞去、走两步、羁绊）+ 修炼（最多 4：信息、渡劫、服丹后渡劫、领悟×2 中的一种组合）
    * 在前，串门项在后——挤不下时先少列几个邻居 / 少几样一起玩和零食，「送客」「切磋」「心魔试炼」「渡劫」这些都要留。
    */
   function wantedLabels(): string[] {
@@ -45,6 +49,9 @@ export function createMenu(ctx: FeatureContext): Menu {
       MENU_DIARY,
       MENU_FLY,
       MENU_WALK,
+      // 羁绊排在两个移动点播之后、修炼之前：和“看看我在干嘛 / 宠物日记”一样是常驻入口，
+      // 但不挡着「飞来飞去 / 走两步」这两个用惯了的项（菜单顺序测试也按这个口径）
+      bondMenuLabel(),
       ...cultivationActions().keys(),
       // 群架（X27）还在本地演示阶段：先排在串门项前面，方便真机看 3/4/5 人的围圈；
       // B4 接上联机、定下入口位置后再挪到切磋那一档
@@ -97,6 +104,9 @@ export function createMenu(ctx: FeatureContext): Menu {
       await lookAtScreen(true);
     } else if (label === MENU_DIARY) {
       await openDiary(now);
+    } else if (label === MENU_BOND || label.startsWith(`${MENU_BOND} ·`)) {
+      // 小窗要一直开着等主人选，不能 await：等它关掉再回来会把后面的菜单点击都堵住
+      void openBond();
     } else if (label === MENU_FLY) {
       await playMove('fly');
     } else if (label === MENU_WALK) {

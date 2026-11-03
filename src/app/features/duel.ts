@@ -48,7 +48,8 @@ export interface Duel {
 }
 
 export function createDuel(ctx: FeatureContext): Duel {
-  const { compose, cultivationOn, nickname, onCultivation, petName, refreshMenu, runSparShow, say } = lazyFns(ctx);
+  const { bondReward, compose, cultivationOn, nickname, onCultivation, petName, refreshMenu, runSparShow, say } =
+    lazyFns(ctx);
   const { deps, log, tracker, diary, neighbors, sparWaitMs } = ctx;
   /** 应战面板已经由别处（右键应战 / 超时 / 收摊）接管：面板 Promise 收尾时别再重复结算 */
   let promptSuperseded = false;
@@ -251,6 +252,7 @@ export function createDuel(ctx: FeatureContext): Duel {
     if (!practice || !id) return;
     onCultivation(Date.now(), practice.sparDone(Date.now(), id, true), { anim: false });
     neighbors.dueled(id, { owner: visitor.owner, pet: visitor.pet }, true, Date.now());
+    bondReward('battle');
     diary.note(
       Date.now(),
       'cultivate',
@@ -315,6 +317,7 @@ export function createDuel(ctx: FeatureContext): Duel {
       // 打完才记账（§X19）
       onCultivation(Date.now(), practice.sparDone(Date.now(), visitorId, won), { anim: false });
       neighbors.dueled(visitorId, { owner: state.visitor.owner, pet: state.visitor.pet }, won, Date.now());
+      if (won) bondReward('battle');
       diary.note(
         Date.now(),
         'cultivate',
@@ -327,6 +330,7 @@ export function createDuel(ctx: FeatureContext): Duel {
       // 记账（同 X5，在开打这一步记；演出只是回放）
       onCultivation(Date.now(), practice.sparDone(Date.now(), visitorId, won), { anim: false });
       neighbors.dueled(visitorId, { owner: state.visitor.owner, pet: state.visitor.pet }, won, Date.now());
+      if (won) bondReward('battle');
       diary.note(
         Date.now(),
         'cultivate',
@@ -484,6 +488,7 @@ export function createDuel(ctx: FeatureContext): Duel {
     // 打完才记账（§X19）
     onCultivation(Date.now(), practice.sparDone(Date.now(), neighbor.id, won), { anim: false });
     neighbors.dueled(neighbor.id, { owner: neighbor.owner, pet: neighbor.pet }, won, Date.now());
+    if (won) bondReward('battle');
     diary.note(Date.now(), 'cultivate', `和 ${neighbor.owner} 家的 ${neighbor.pet} 隔空切磋，${won ? '赢了' : '输了'}`);
     void say(won ? '这场隔空切磋我赢啦！' : '这场隔空切磋输了，下次再战～', { anim: false });
     void say(await duelRemark(neighbor, won), { anim: false });

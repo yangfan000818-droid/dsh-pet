@@ -49,6 +49,7 @@ export interface Visiting {
 
 export function createVisiting(ctx: FeatureContext): Visiting {
   const {
+    bondReward,
     cancelSpar,
     closeAdventureShows,
     closeTrial,
@@ -508,6 +509,7 @@ export function createVisiting(ctx: FeatureContext): Visiting {
             : '';
     const treats = current.treats.length > 0 ? `，吃到了${current.treats.join('、')}` : '';
     diary.note(Date.now(), 'visit', `去 ${owner} 家串门，和它家的宠物 ${pet} 聊了 ${chats} 句${treats}${ending}`);
+    bondReward('visit');
     if (current.verified) saveMemo(current.host.id, owner, pet, current.lines);
     void refreshStatus(Date.now());
     void refreshMenu();

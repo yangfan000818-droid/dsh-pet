@@ -22,7 +22,7 @@
  *
  * 限额（防本机进程把菜单/内存刷爆）：
  *  - owner ≤ 64 字符、label ≤ 32 字符（都允许中文，trim 后非空，禁控制字符）
- *  - 每 owner ≤ 20 项、全局 ≤ 32 个 owner
+ *  - 每 owner ≤ 24 项、全局 ≤ 32 个 owner
  */
 
 /** owner 长度上限 */
@@ -30,7 +30,7 @@ const OWNER_MAX = 64;
 /** 单个菜单项 label 长度上限（面板宽 150–240px，再长会被省略号截断） */
 const LABEL_MAX = 32;
 /** 每 owner 菜单项上限 */
-const ITEMS_MAX = 20;
+const ITEMS_MAX = 24;
 /** 全局 owner 上限 */
 const OWNERS_MAX = 32;
 /** 长轮询等待上限（与 /state 同一量级：调用方一次最多挂这么久） */

@@ -59,7 +59,7 @@ const POLL_WAIT_MS = 15_000;
 const MODE_MS = 10_000;
 /** 手动一手等多久；超时按后备自动挑一手 */
 const TURN_MS = 20_000;
-/** 菜单里最多列几家的「加入」项：菜单总共就 20 项，串门与切磋项还占着位置 */
+/** 菜单里最多列几家的「加入」项：菜单总共就 24 项，串门与切磋项还占着位置 */
 const JOIN_ITEMS_MAX = 2;
 
 /** 开着的桌（房主或客人）。同一时间只有一张。 */
@@ -573,7 +573,7 @@ export function createBrawlLiveFeature(ctx: FeatureContext): BrawlLiveFeature {
       return actions;
     }
     actions.set(`${MENU_BRAWL_GROUP}/联机开桌`, () => void openTable());
-    // 加入哪家：列最近的几家邻居（菜单一共 20 项，列三家就够）
+    // 加入哪家：列最近的几家邻居（菜单一共 24 项，列两家就够）
     const nearby = (ctx.state.neighborhood?.list() ?? []).slice(0, JOIN_ITEMS_MAX);
     for (const neighbor of nearby) {
       let label = `${MENU_BRAWL_GROUP}/加入 ${neighbor.pet} 家`;

@@ -7,10 +7,10 @@ import { MENU_CULTIVATION_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
 import { errorText } from './util';
 
-/** 插件每个 owner 最多 20 项（`>` 就整份拒掉、菜单从此不再更新）：根上固定 2 项，修炼最多 5 项
+/** 插件每个 owner 最多 24 项（`>` 就整份拒掉、菜单从此不再更新）：根上固定 5 项，修炼最多 5 项
  * （信息 + 历练 + 渡劫 + 服丹后渡劫 + 心魔试炼／快进；待选二选一那两项只在没圆满时出现），邻居最多列这么多
- * （回访占名额）= 恰好 20。家里有客时换成送客 + 切磋 + 一起玩 + 请吃零食 + 熟人 + 捎话，至多 17 项，
- * 加上修炼的项会超 20：wantedLabels 按优先级兜底截断，先少的是尾巴上的零食和捎话。 */
+ * （回访占名额）：满打满算 23 项，给隔空切磋留 1 项。家里有客时换成送客 + 切磋 + 一起玩 + 请吃零食 + 熟人 + 捎话，
+ * 至多 17 项，加上固定项和修炼的项会超 24：wantedLabels 按优先级兜底截断，先少的是尾巴上的零食和捎话。 */
 const MENU_NEIGHBORS_MAX = 13;
 
 /** 串门的右键项与捎话 */
