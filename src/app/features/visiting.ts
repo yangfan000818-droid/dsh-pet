@@ -20,7 +20,7 @@ import {
 import type { HostHandlers, KnockAnswer, KnockFailure, Neighbor, Visitor } from '../visit';
 
 import { lazyFns } from './context';
-import type { FeatureContext, GuestOffOptions, HomeReason, Hosting, Trip } from './context';
+import type { FeatureContext, HomeReason, Hosting, Trip } from './context';
 import { errorText } from './util';
 
 /** 捎到的话在客人窗口的气泡里显示多久（比聊天的话久：主人要读自己写的那句到了没） */
@@ -31,7 +31,6 @@ const HOME_WITHOUT_CHAT: Record<HomeReason, string> = {
   called: '刚进门家里就有事，先回来了',
   'sent-home': '刚进门就被它家主人请回来了',
   lost: '突然连不上它家，只好回来了',
-  farewell: '被一阵风送回来了，还没聊上话',
 };
 
 /** 串门：网络、敲门、接待、右键项与回家 */
@@ -41,7 +40,7 @@ export interface Visiting {
   syncVisit(): Promise<void>;
   closeHost(): Promise<void>;
   letIn(accept: boolean): void;
-  sendGuestHome(options?: GuestOffOptions): void;
+  sendGuestHome(): void;
   goVisit(id: string): Promise<void>;
   visitLine(instruction: string, fallback: string): Promise<string>;
   comeHome(reason: HomeReason): Promise<void>;
@@ -330,33 +329,21 @@ export function createVisiting(ctx: FeatureContext): Visiting {
     if (deps.appConfig().visit.chat) current.openerTimer = setTimeout(() => void openTopic(current), openerGap(true));
   }
 
-  function sendGuestHome(options: GuestOffOptions = {}): void {
+  function sendGuestHome(): void {
     const visitor = ctx.state.visitHost?.sendHome();
-    if (visitor)
-      seeGuestOff(visitor, options.farewell ?? '那我先回家啦～', `${visitor.pet} 回家啦～`, {
-        wave: options.wave ?? true,
-        floatAway: options.floatAway === true,
-        closeMs: options.closeMs ?? 5_000,
-      });
+    if (visitor) seeGuestOff(visitor, '那我先回家啦～', `${visitor.pet} 回家啦～`);
   }
 
   /** 送客：客人窗口说完告别的话、挥挥手再关，自家宠物说一句，记进日记 */
-  function seeGuestOff(
-    visitor: Visitor,
-    farewell: string,
-    line: string,
-    options: { wave?: boolean; floatAway?: boolean; closeMs?: number } = {},
-  ): void {
+  function seeGuestOff(visitor: Visitor, farewell: string, line: string): void {
     const current = ctx.state.hosting;
     ctx.state.hosting = null;
-    // 正在切磋（主人家这一侧）：收摊——账在亮随机数那一步就记过了，不会漏
     cancelSpar();
     if (current) {
       if (current.openerTimer !== null) clearTimeout(current.openerTimer);
       if (farewell) current.window.say(farewell);
-      if (options.wave ?? true) current.window.wave();
-      if (options.floatAway === true) current.window.floatAway(options.closeMs ?? 1_500);
-      current.window.close(options.closeMs ?? 5_000);
+      current.window.wave();
+      current.window.close(5_000);
     }
     log(`串门：${visitor.owner} 家的 ${visitor.pet} 走了`);
     diary.note(
@@ -448,8 +435,6 @@ export function createVisiting(ctx: FeatureContext): Visiting {
       talkTimer: null,
       pingTimer: setInterval(() => void pingTrip(current), PING_MS),
       pendingHome: null,
-      farewell: false,
-      farewellTimer: null,
     };
     ctx.state.trip = current;
     fadeHome(electron, AWAY_OPACITY);
@@ -470,12 +455,9 @@ export function createVisiting(ctx: FeatureContext): Visiting {
     const current = ctx.state.trip;
     if (!current) return;
     ctx.state.trip = null;
-    // 正在切磋（客人这一侧）：转播收摊，账在亮随机数那一步就记过了，不会漏
     cancelSpar();
     clearInterval(current.pingTimer);
     if (current.talkTimer !== null) clearTimeout(current.talkTimer);
-    if (current.farewellTimer) clearTimeout(current.farewellTimer);
-    current.farewellTimer = null;
     fadeHome(electron, 1);
     const { owner, pet } = current.host;
     log(`串门：从 ${owner} 家回来了（${reason}）`);
@@ -495,18 +477,7 @@ export function createVisiting(ctx: FeatureContext): Visiting {
       );
     }
     const chats = current.lines.filter((line) => line.startsWith('你：')).length;
-    // 送友风送回家（X16）：被对方送回来的用任务书那句；自己把对方送飘起来的，照实说一句
-    const farewellEnding = current.farewellBySelf
-      ? `，用送友风把 ${pet} 送得飘起来，告辞回家了`
-      : `，被 ${pet} 的送友风送回家了`;
-    const ending =
-      reason === 'farewell'
-        ? farewellEnding
-        : reason === 'sent-home'
-          ? '，被它家主人请回来了'
-          : reason === 'lost'
-            ? '，后来连不上就回来了'
-            : '';
+    const ending = reason === 'sent-home' ? '，被它家主人请回来了' : reason === 'lost' ? '，后来连不上就回来了' : '';
     const treats = current.treats.length > 0 ? `，吃到了${current.treats.join('、')}` : '';
     diary.note(Date.now(), 'visit', `去 ${owner} 家串门，和它家的宠物 ${pet} 聊了 ${chats} 句${treats}${ending}`);
     bondReward('visit');

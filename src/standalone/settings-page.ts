@@ -97,7 +97,7 @@ export const settingsPage = `<!doctype html>
 </fieldset>
 <fieldset id="cultivation-settings" data-page="cultivation" hidden><legend>修炼</legend>
 <label class="check"><input id="cultivationEnabled" type="checkbox" aria-describedby="cultivation-note">开启修炼</label>
-<p id="cultivation-note" class="hint">开着时，桌宠在电脑前就攒修为，右键「修炼」里能看境界、渡劫、心魔试炼，串门时还能和邻居切磋；修为、法宝与战绩都只存本机。关掉后不再攒，已攒的不丢，重新打开接着修。</p>
+<p id="cultivation-note" class="hint">开着时，桌宠在电脑前就攒修为，右键「修炼」里能看境界、渡劫、心魔试炼；修为、法宝与战绩都只存本机。关掉后不再攒，已攒的不丢，重新打开接着修。切磋和修炼无关，关着也能串门或隔空和邻居打。</p>
 <div id="cultivation-view" hidden></div>
 </fieldset>
 </div>

@@ -1,12 +1,7 @@
 import { timeline, swapSides } from './battle-show.ts';
-import { fairSparPair } from './battle.ts';
-import {
-  FAREWELL_WAIT_MS,
-  guestFarewellDiary,
-  hostFarewellDiary,
-  hostFarewellPrompt,
-  hostFarewellSend,
-} from './features/spar.ts';
+import { SPAR_OPTIONS, sparFighter } from './spar-rules.ts';
+import { settleSpar, sparDiaryText, sparOutcome } from './features/spar-result.ts';
+import type { FeatureContext } from './features/context.ts';
 import { diaryDate } from './diary.ts';
 import type { DiaryDay } from './diary.ts';
 import {
@@ -23,6 +18,8 @@ import {
   hostFighter,
   petNameIn,
   cultivationSave,
+  neighborsSave,
+  sparCount,
   windowOn,
   memeAsks,
   env,
@@ -30,7 +27,6 @@ import {
   last,
   neighborRecord,
   hostedApp,
-  fightCount,
   fakeDuelHost,
   pickPanel,
 } from './features-testkit.ts';
@@ -43,7 +39,6 @@ import {
   sparCommit,
   sendReveal,
   sparFight,
-  cardFighter,
   sparLineRng,
   sparCardOf,
   VisitHost,
@@ -59,7 +54,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮随机数 → 演出与擂台 → 修为、战绩、邻居簿、日记都记上', async () => {
+test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮随机数 → 演出与擂台 → 邻居战绩、日记都记上', async () => {
   const clicks: string[] = [];
   windows.length = 0;
   const beaconPort = await freeUdpPort();
@@ -78,8 +73,8 @@ test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮�
         // 真机上 helper 会一直报自家宠物位置；先报一次，特效层才摆得出来
         emitPetBounds({ x: 100, y: 100, marginL: 0, marginT: 0, size: 200, bottomPad: 20 });
         const { port, token } = await knockIn(home, clicks, extras);
-        // 切磋的菜单项有了（开着修炼、客人在、验证过身份、没在打）
-        await until(() => menus.some((labels) => labels.includes('串门/和客人切磋')), '切磋菜单项');
+        // 切磋的菜单项有了（客人在、验证过身份、没在打；和修炼开关无关）
+        await until(() => menus.some((labels) => labels.includes('切磋/和客人切磋')), '切磋菜单项');
         // 主人家邀的一律是逐手局（X19）：全自动局只剩旧客人自己开口这一种，照旧应战、整场算好；
         // 正在打时再来一发是 busy
         const ownNonce = randomSparNonce();
@@ -97,10 +92,12 @@ test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮�
           await sendReveal({ address: '127.0.0.1', port }, { token, nonce: ownNonce, line: '承让承让～' }),
           { ok: true },
         );
-        const [zero, one] = fairSparPair(hostFighter, cardFighter('阿花', guestCard()));
-        const fightEvents = sparFight(zero, one, ownNonce, hostNonce);
+        const zero = sparFighter(petNameIn(home));
+        const one = sparFighter('阿花');
+        const fightEvents = sparFight(zero, one, ownNonce, hostNonce, { ...SPAR_OPTIONS, farewell: true });
         const fightEnd = fightEvents[fightEvents.length - 1]!;
-        const won = fightEnd.kind === 'end' && fightEnd.winner === 0;
+        const outcome = sparOutcome(fightEnd, 0);
+        const won = outcome === 'win';
         // 主人家这边的解说也用 sparLineRng（X12）：复算一遍时间线，自己那一方的第一句要在 /broadcast 里出现
         const expectedSteps = timeline(fightEvents, [petNameIn(home), '阿花'], sparLineRng(ownNonce, hostNonce), [
           zero.skills,
@@ -109,24 +106,26 @@ test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮�
         const ownLine = expectedSteps.find((step) => step.line && step.who === 0)?.line;
         const firstLine = ownLine ?? expectedSteps.find((step) => step.line)?.line;
         assert.ok(firstLine, '这一场排出了解说台词');
-        // 这边的账：战绩 +1、修为进账（anim:false 的冒泡）、邻居簿、日记
-        await until(() => {
-          const record = cultivationSave(home)?.record as { wins: number; losses: number } | undefined;
-          return record !== undefined && record.wins + record.losses === 1;
-        }, '战绩记上了');
-        const record = cultivationSave(home)!.record as { wins: number; losses: number };
-        assert.equal(won ? record.wins : record.losses, 1, '输赢跟两边各自算的那场一致');
-        assert.ok((cultivationSave(home)!.progress as number) > 0, '修为进了账');
-        const book = JSON.parse(readFileSync(join(home, 'neighbors.json'), 'utf8')) as {
-          neighbors: Array<Record<string, unknown>>;
-        };
-        assert.equal(book.neighbors.length, 1);
-        assert.equal(book.neighbors[0][won ? 'sparWins' : 'sparLosses'], 1, '邻居簿记了切磋账');
-        assert.equal(book.neighbors[0].lastSparWon, won, '上次切磋的输赢留给见面提');
+        // 这边的账：邻居簿记胜负（平局不记）、没有修为进账（切磋和修炼解绑）、日记照记
+        if (outcome !== 'draw') await until(() => sparCount(home) === 1, '邻居战绩记上了');
+        const book = neighborsSave(home);
+        assert.equal(book.length, 1);
+        assert.equal(book[0]![won ? 'sparWins' : 'sparLosses'], outcome === 'draw' ? 0 : 1, '邻居簿记了切磋账');
+        if (outcome === 'draw') {
+          assert.equal(book[0]!.sparWins, 0, '平局不记胜');
+          assert.equal(book[0]!.sparLosses, 0, '平局不记负');
+          assert.equal(book[0]!.lastSparWon, null, '平局不改上次输赢');
+        } else {
+          assert.equal(book[0]!.lastSparWon, won, '上次切磋的输赢留给见面提');
+        }
+        assert.equal(cultivationSave(home)?.progress, 0, '切磋不再给修为');
+        assert.deepEqual(cultivationSave(home)?.record, { wins: 0, losses: 0 }, '切磋不再写修炼战绩');
         const day = JSON.parse(readFileSync(join(home, 'diary', `${diaryDate(Date.now())}.json`), 'utf8')) as DiaryDay;
         assert.ok(
-          day.events.some((event) => event.kind === 'cultivate' && /切磋/.test(event.text)),
-          '记了日记',
+          day.events.some(
+            (event) => event.kind === 'cultivate' && event.text.includes(sparDiaryText('小李', '阿花', outcome)),
+          ),
+          '记了日记（平局也有明确文案）',
         );
         // 演出：擂台开了、客人窗口照旧粉色、打的时候菜单换成快进
         await until(() => windowOn('/app/arena') !== undefined, '擂台开了', 400);
@@ -167,7 +166,7 @@ test('切磋（主人家）：旧客人开口的全自动局 → 应战 → 亮�
         await until(
           () => {
             const latest = menus[menus.length - 1] ?? [];
-            return latest.includes('串门/和客人切磋') && !latest.includes('修炼/快进');
+            return latest.includes('切磋/和客人切磋') && !latest.includes('修炼/快进');
           },
           '打完菜单收回来（battle 清零、快进消失）',
           400,
@@ -236,15 +235,15 @@ test('切磋：随机数对不上、超时没亮、邀约没人接，各按各�
       const { port, token } = await knockIn(home, clicks, extras);
       const target = { address: '127.0.0.1', port };
       // 邀约没人接：过了时限收摊，说一句没接招
-      await until(() => menus.some((labels) => labels.includes('串门/和客人切磋')));
-      clicks.push('串门/和客人切磋');
+      await until(() => menus.some((labels) => labels.includes('切磋/和客人切磋')));
+      clicks.push('切磋/和客人切磋');
       await pickPanel(features, 1, '串门切磋方式');
       await until(() => said.some((text) => text.includes('过两招')), '开场那句');
       // 主人选的是自动，邀的照样是逐手局：客人也能在它自己的面板里选
       const ping = await tripRequest(target, '/v1/ping', { token });
       assert.ok(
-        ping.ok && ping.events.some((event) => event.type === 'spar-invite' && event.mode === 'live'),
-        '邀约带 mode: live',
+        ping.ok && ping.events.some((event) => event.type === 'spar-invite' && event.mode === SPAR_LIVE_MODE),
+        '邀约带当前逐手模式',
       );
       await until(() => said.some((text) => text.includes('没接招')), '邀约超时收摊');
       // 应战 → 亮的随机数对不上：按客人认输记（这边的战绩是赢），应答如实说 mismatch
@@ -259,7 +258,8 @@ test('切磋：随机数对不上、超时没亮、邀约没人接，各按各�
         ok: false,
         reason: 'mismatch',
       });
-      await until(() => (cultivationSave(home)?.record as { wins: number }).wins === 1, '认输记成赢');
+      await until(() => neighborsSave(home)[0]?.sparWins === 1, '认输记成赢');
+      assert.equal(cultivationSave(home)?.progress, 0, '切磋没有修为进账');
       // 没开打：没有擂台、没有快进、客人那句「感言」也没上屏
       await new Promise((done) => setTimeout(done, 200));
       assert.equal(windowOn('/app/arena'), undefined, '没开擂台');
@@ -282,7 +282,7 @@ test('切磋：随机数对不上、超时没亮、邀约没人接，各按各�
         ok: false,
         reason: 'late',
       });
-      await until(() => (cultivationSave(home)?.record as { wins: number }).wins === 2, '超时也是认输');
+      await until(() => neighborsSave(home)[0]?.sparWins === 2, '超时也是认输');
     },
   );
 });
@@ -299,7 +299,8 @@ test('切磋（客人）：旧主人家邀的全自动局 → 应战、亮随机
     { name: '大个', hp: 70, power: 8, agility: 6, speed: 6, weapons: ['top'], skills: ['shadow-fists'] },
     3,
   );
-  const fakeId = 'f'.repeat(32);
+  const fakeIdentity = generateVisitIdentity();
+  const fakeId = fakeIdentity.id;
   const saw: { card: SparCard | null; commit: string | null; nonce: string | null; line: string | null } = {
     card: null,
     commit: null,
@@ -332,7 +333,7 @@ test('切磋（客人）：旧主人家邀的全自动局 → 应战、亮随机
       duelConceded: () => undefined,
       left: () => undefined,
     },
-    { log: () => undefined },
+    { log: () => undefined, identity: fakeIdentity },
   );
   const fakePort = await fake.listen('127.0.0.1');
   const beaconPort = await freeUdpPort();
@@ -356,7 +357,7 @@ test('切磋（客人）：旧主人家邀的全自动局 → 应战、亮随机
           400,
         );
         clicks.push('串门/去 测试邻居 家');
-        await until(() => menus.some((labels) => labels.includes('串门/找主人家的宠物切磋')), '进了门、切磋项出现');
+        await until(() => menus.some((labels) => labels.includes('切磋/找主人家的宠物切磋')), '进了门、切磋项出现');
         // 自己开口的一律是逐手局（X19）：全自动局只剩旧主人家邀的这一种（邀约不带 mode），客人不弹面板、直接应战
         assert.ok(fake.tell({ type: 'spar-invite' }), '邀约攒进出风箱');
         // 客人发来名帖与承诺，接着亮随机数（带一句按人设编的感言）
@@ -364,11 +365,13 @@ test('切磋（客人）：旧主人家邀的全自动局 → 应战、亮随机
         await until(() => saw.card !== null, '切磋请求送到了主人家', 400);
         await until(() => saw.nonce !== null, '亮了随机数');
         assert.equal(saw.line, env.memeAnswer, '感言走 compose（假模型的回答，不是兜底模板）');
-        // 账：测试拿同一对随机数复核这场谁赢，客人的记录必须一致
-        const [away, own] = fairSparPair(cardFighter('大个', fakeCard), hostFighter);
-        const expected = sparFight(away, own, saw.nonce!, HOST_NONCE);
+        // 账：测试拿同一对随机数复核这场谁赢，客人记的邻居簿必须一致（切磋不再给修为）
+        const away = sparFighter('大个');
+        const own = sparFighter(petNameIn(home));
+        const expected = sparFight(away, own, saw.nonce!, HOST_NONCE, { ...SPAR_OPTIONS, farewell: true });
         const expectedEnd = expected[expected.length - 1]!;
-        const won = expectedEnd.kind === 'end' && expectedEnd.winner === 1;
+        const outcome = sparOutcome(expectedEnd, 1);
+        const won = outcome === 'win';
         // 两边台词用同一颗种子（X12）：客人这边换边后的时间线里，第一句要在自己的 /broadcast 里出现
         const guestSteps = swapSides(
           timeline(expected, ['大个', petNameIn(home)], sparLineRng(saw.nonce!, HOST_NONCE), [away.skills, own.skills]),
@@ -376,13 +379,21 @@ test('切磋（客人）：旧主人家邀的全自动局 → 应战、亮随机
         const ownGuestLine = guestSteps.find((step) => step.line && step.who === 0)?.line;
         const firstGuestLine = ownGuestLine ?? guestSteps.find((step) => step.line)?.line;
         assert.ok(firstGuestLine, '这一场排出了解说台词');
-        await until(() => {
-          const record = cultivationSave(home)?.record as { wins: number; losses: number } | undefined;
-          return record !== undefined && record.wins + record.losses === 1;
-        }, '客人这边记了账');
-        const record = cultivationSave(home)!.record as { wins: number; losses: number };
-        assert.equal(won ? record.wins : record.losses, 1, '输赢跟两边各自算的那场一致');
-        assert.ok((cultivationSave(home)!.progress as number) > 0, '修为进了账（relay，不叫回家）');
+        await until(
+          () =>
+            JSON.parse(readFileSync(join(home, 'diary', `${diaryDate(Date.now())}.json`), 'utf8')).events.some(
+              (event: { text?: string }) => /切磋/.test(event.text ?? ''),
+            ),
+          '客人这边记了日记',
+        );
+        const book = neighborsSave(home);
+        assert.equal(
+          Number(book[0]?.[won ? 'sparWins' : 'sparLosses'] ?? 0),
+          outcome === 'draw' ? 0 : 1,
+          '邻居簿跟复核一致',
+        );
+        assert.equal(cultivationSave(home)?.progress, 0, '切磋没有修为进账（relay 不再有 +修为）');
+        assert.deepEqual(cultivationSave(home)?.record, { wins: 0, losses: 0 }, '切磋不写修炼战绩');
         const day = JSON.parse(readFileSync(join(home, 'diary', `${diaryDate(Date.now())}.json`), 'utf8')) as DiaryDay;
         assert.ok(
           day.events.some((event) => event.kind === 'cultivate' && /切磋/.test(event.text)),
@@ -494,9 +505,9 @@ test('隔空切磋（应战方）：冒话、两个菜单项 → 点应战 → �
         await until(() => said.some((text) => text.includes('小李 家的 阿花 想跟我切磋')), '冒话');
         await until(() => {
           const latest = extras.menus[extras.menus.length - 1] ?? [];
-          return latest.includes('修炼/应战：小李 家的 阿花') && latest.includes('修炼/不应战');
+          return latest.includes('切磋/应战：小李 家的 阿花') && latest.includes('切磋/不应战');
         }, '两个应答项');
-        clicks.push('修炼/应战：小李 家的 阿花');
+        clicks.push('切磋/应战：小李 家的 阿花');
         const reply = await asking;
         assert.ok(reply.ok, `应战没成：${JSON.stringify(reply)}`);
         assert.deepEqual(reply.ok ? reply.card : null, sparCardOf(hostFighter, 0), '应战方回自己的名帖');
@@ -509,20 +520,19 @@ test('隔空切磋（应战方）：冒话、两个菜单项 → 点应战 → �
           ),
           { ok: true },
         );
-        const [zero, one] = fairSparPair(hostFighter, cardFighter('阿花', card));
-        const expected = sparFight(zero, one, ownNonce, hostNonce);
+        const zero = sparFighter(petNameIn(home));
+        const one = sparFighter('阿花');
+        const expected = sparFight(zero, one, ownNonce, hostNonce, SPAR_OPTIONS);
         const end = expected[expected.length - 1]!;
-        const won = end.kind === 'end' && end.winner === 0;
-        // 这边的账：修为进账、战绩、邻居簿、日记（都是开打那一步记的）
-        await until(() => fightCount(home) === 1, '战绩记上了');
-        const record = cultivationSave(home)!.record as { wins: number; losses: number };
-        assert.equal(won ? record.wins : record.losses, 1, '输赢跟两边各自算的那场一致');
-        assert.ok((cultivationSave(home)!.progress as number) > 0, '修为进了账');
-        const book = JSON.parse(readFileSync(join(home, 'neighbors.json'), 'utf8')) as {
-          neighbors: Array<Record<string, unknown>>;
-        };
-        assert.equal(book.neighbors[0][won ? 'sparWins' : 'sparLosses'], 1, '邻居簿记了隔空切磋账');
-        assert.equal(book.neighbors[0].lastSparWon, won);
+        const outcome = sparOutcome(end, 0);
+        const won = outcome === 'win';
+        // 这边的账：邻居簿、日记（切磋不再写修为 / 全局战绩）
+        if (outcome !== 'draw') await until(() => sparCount(home) === 1, '邻居战绩记上了');
+        const book = neighborsSave(home);
+        assert.equal(book[0]?.[won ? 'sparWins' : 'sparLosses'], outcome === 'draw' ? 0 : 1, '邻居簿记了隔空切磋账');
+        if (outcome !== 'draw') assert.equal(book[0]?.lastSparWon, won);
+        assert.equal(cultivationSave(home)?.progress, 0, '切磋没有修为进账');
+        assert.deepEqual(cultivationSave(home)?.record, { wins: 0, losses: 0 }, '切磋不写修炼战绩');
         await until(() => {
           const path = join(home, 'diary', `${diaryDate(Date.now())}.json`);
           if (!existsSync(path)) return false;
@@ -601,13 +611,13 @@ test('隔空切磋（应战方）：点不应战不记账，也不开窗', async
       });
       await until(() => {
         const latest = extras.menus[extras.menus.length - 1] ?? [];
-        return latest.includes('修炼/不应战');
+        return latest.includes('切磋/不应战');
       }, '不应战菜单项');
-      clicks.push('修炼/不应战');
+      clicks.push('切磋/不应战');
       assert.deepEqual(await asking, { ok: false, reason: 'declined' });
       await until(() => said.some((text) => text.includes('不跟 阿花 切磋')), '说了不应战');
       await new Promise((done) => setTimeout(done, 200));
-      assert.equal(fightCount(home), 0, '不应战不记账');
+      assert.equal(sparCount(home), 0, '不应战不记账');
       assert.equal(windowOn('/app/arena'), undefined, '没开擂台');
       assert.equal(windowOn('/app/guest'), undefined, '没开对手窗口');
       const path = join(home, 'diary', `${diaryDate(Date.now())}.json`);
@@ -653,7 +663,7 @@ test('隔空切磋（应战方）：收到挑战直接弹确认面板，点不�
       await until(() => said.some((text) => text.includes('不跟 阿花 切磋')), '说了不应战');
       assert.equal(windowOn('/app/arena'), undefined, '没开擂台');
       assert.equal(windowOn('/app/guest'), undefined, '没开对手窗口');
-      assert.equal(fightCount(home), 0, '不应战不记账');
+      assert.equal(sparCount(home), 0, '不应战不记账');
     },
   );
 });
@@ -689,7 +699,7 @@ test('隔空切磋（应战方）：熟人自动应战，不挂菜单；退出�
         assert.ok(reply.ok, `熟人应自动应战：${JSON.stringify(reply)}`);
         await until(() => said.some((text) => text.includes('直接应战')), '说了直接应战');
         assert.ok(
-          extras.menus.every((labels) => !labels.some((label) => label.startsWith('修炼/应战'))),
+          extras.menus.every((labels) => !labels.some((label) => label.startsWith('切磋/应战'))),
           '自动应战不挂「应战」菜单',
         );
         // 亮随机数开演：先看到三扇窗，然后直接退出（withFeatures 的 finally 收摊）
@@ -746,7 +756,7 @@ test('隔空切磋：有客人在家、自己出门做客时都回 busy，不开
       );
       await new Promise((done) => setTimeout(done, 100));
       assert.ok(
-        extras.menus.every((labels) => !labels.some((label) => label.startsWith('修炼/应战'))),
+        extras.menus.every((labels) => !labels.some((label) => label.startsWith('切磋/应战'))),
         '有客人在家不挂应答菜单',
       );
     },
@@ -859,20 +869,17 @@ test('隔空切磋（挑战方）：只列带 id 的在线邻居，最多 3 个�
         await until(
           () => {
             const latest = extras.menus[extras.menus.length - 1] ?? [];
-            return latest.filter((label) => label.startsWith('修炼/切磋/')).length === 3;
+            return latest.filter((label) => label.startsWith('切磋/')).length === 3;
           },
           '三个切磋项',
           600,
         );
         const latest = extras.menus[extras.menus.length - 1]!;
-        const duelLabels = latest.filter((label) => label.startsWith('修炼/切磋/'));
+        const duelLabels = latest.filter((label) => label.startsWith('切磋/'));
         assert.equal(duelLabels.length, 3, '最多 3 个');
-        assert.ok(
-          duelLabels.includes(`修炼/切磋/${friend.owner} 家的 ${friend.pet}`),
-          '熟人在前（哪怕它按名字排在最后）',
-        );
+        assert.ok(duelLabels.includes(`切磋/${friend.owner} 家的 ${friend.pet}`), '熟人在前（哪怕它按名字排在最后）');
         const cut = sorted[sorted.length - 2]!;
-        assert.ok(!duelLabels.includes(`修炼/切磋/${cut} 家的 小${cut}`), '被截掉的是排序最后的那位');
+        assert.ok(!duelLabels.includes(`切磋/${cut} 家的 小${cut}`), '被截掉的是排序最后的那位');
       },
     );
   } finally {
@@ -905,16 +912,12 @@ test('隔空切磋（挑战方）：对方不应战就说一句，不记账、�
         beacon: { port: beaconPort, targets: () => [] },
       },
       async (features, said, _bodies, home, extras) => {
-        await until(
-          () => extras.menus.some((labels) => labels.includes('修炼/切磋/测试邻居 家的 大个')),
-          '挑战项出现',
-          400,
-        );
-        clicks.push('修炼/切磋/测试邻居 家的 大个');
+        await until(() => extras.menus.some((labels) => labels.includes('切磋/测试邻居 家的 大个')), '挑战项出现', 400);
+        clicks.push('切磋/测试邻居 家的 大个');
         await pickPanel(features, 1, '隔空切磋方式');
         await until(() => said.some((text) => text.includes('没应战')), '说了没应战');
         await new Promise((done) => setTimeout(done, 200));
-        assert.equal(fightCount(home), 0, '不记账');
+        assert.equal(sparCount(home), 0, '不记账');
         assert.equal(windowOn('/app/arena'), undefined, '没开擂台');
         assert.equal(windowOn('/app/guest'), undefined, '没开对手窗口');
         const path = join(home, 'diary', `${diaryDate(Date.now())}.json`);
@@ -923,11 +926,7 @@ test('隔空切磋（挑战方）：对方不应战就说一句，不记账、�
           assert.ok(!day.events.some((event) => event.text.includes('隔空切磋')), '不记日记');
         }
         // 应战方没应战：挑战项回来，可以再点
-        await until(
-          () => extras.menus.some((labels) => labels.includes('修炼/切磋/测试邻居 家的 大个')),
-          '挑战项回来',
-          400,
-        );
+        await until(() => extras.menus.some((labels) => labels.includes('切磋/测试邻居 家的 大个')), '挑战项回来', 400);
       },
     );
   } finally {
@@ -937,16 +936,37 @@ test('隔空切磋（挑战方）：对方不应战就说一句，不记账、�
   }
 });
 
-test('X16 串门里送走：主人家送客的演法与日记、客人家回家的日记，都按任务书的口径', () => {
-  // 自己把客人送走：客人飘走（整扇窗往上飘、淡出），不挥手也不说告别的话；1.5 秒后关
-  assert.deepEqual(hostFarewellSend(true), { farewell: '', wave: false, floatAway: true, closeMs: 1_500 });
-  assert.equal(hostFarewellDiary('小李', '阿花', true), '用送友风把 阿花 送回家了');
-  // 被客人送走：客人说「告辞～」再走
-  assert.deepEqual(hostFarewellSend(false), { farewell: '告辞～', wave: true });
-  assert.match(hostFarewellDiary('小李', '阿花', false), /被它的送友风送得飘起来/);
-  assert.match(hostFarewellPrompt('小李', '阿花', true), /用送友风把来串门的阿花/);
-  // 客人这一侧：被送回家的用任务书那句；自己放的说清是「把它送得飘起来」
-  assert.equal(guestFarewellDiary('小李', '阿花', false), '和 小李 家的 阿花 切磋，被它的送友风送回家了');
-  assert.match(guestFarewellDiary('小李', '阿花', true), /用送友风把它送得飘起来/);
-  assert.equal(FAREWELL_WAIT_MS, 15_000, '演完等 sent-home 的兜底是 15 秒');
+test('切磋平局：不记胜负、不给胜利羁绊，日记明确写打平', () => {
+  const end = {
+    actor: 1,
+    kind: 'end',
+    winner: 1,
+    reason: 'timeout',
+    hp: [12, 12],
+    draw: true,
+  } as unknown as Parameters<typeof sparOutcome>[0];
+  assert.equal(sparOutcome(end, 0), 'draw');
+  assert.equal(sparOutcome(end, 1), 'draw');
+  assert.equal(sparDiaryText('小李', '阿花', 'draw'), '和 小李 家的 阿花 切磋，打平了');
+  assert.equal(sparDiaryText('小李', '阿花', 'draw', 'duel'), '和 小李 家的 阿花 隔空切磋，打平了');
+  const calls = { spar: [] as boolean[], duel: [] as boolean[], bond: 0, notes: [] as string[] };
+  const ctx = {
+    neighbors: {
+      recordSpar: (_id: string, won: boolean) => calls.spar.push(won),
+      dueled: (_id: string, _names: unknown, won: boolean) => calls.duel.push(won),
+    },
+    diary: { note: (_now: number, _kind: string, text: string) => calls.notes.push(text) },
+    fns: { bondReward: () => (calls.bond += 1) },
+  } as unknown as FeatureContext;
+  settleSpar(ctx, {
+    kind: 'spar',
+    neighborId: 'x'.repeat(32),
+    names: { owner: '小李', pet: '阿花' },
+    outcome: 'draw',
+    diary: sparDiaryText('小李', '阿花', 'draw'),
+  });
+  assert.deepEqual(calls.spar, [], '平局不写邻居胜负');
+  assert.deepEqual(calls.duel, [], '平局不写隔空胜负');
+  assert.equal(calls.bond, 0, '平局不给胜利羁绊');
+  assert.deepEqual(calls.notes, ['和 小李 家的 阿花 切磋，打平了'], '平局照记日记');
 });

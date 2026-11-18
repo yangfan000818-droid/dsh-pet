@@ -18,7 +18,7 @@ import {
 } from '../visit-talk';
 import type { PlayThing } from '../visit-talk';
 import { AWAY_OPACITY, RELAY_OPACITY, fadeHome } from '../visit-windows';
-import { cleanText, LINE_MAX, tripRequest } from '../visit';
+import { cleanText, LINE_MAX, SPAR_LIVE_MODE, tripRequest } from '../visit';
 import type { HostEvent, TripReply } from '../visit';
 import { lazyFns } from './context';
 import type { FeatureContext, HomeReason, Hosting, Trip } from './context';
@@ -138,15 +138,13 @@ export function createVisitingChat(ctx: FeatureContext): VisitingChat {
   }
 
   /**
-   * 该回家了：正在演（切磋 / 逐手局）就先记下，等演到送走那一拍再回家（X16 的时差兜底：
-   * 主人家可能先送了 sent-home，自家这边还在演）。演出结束后 startGuestSpar 会接着处理。
+   * 主人家可能在自家切磋还没播完时请回客人：先记下，等这边收场再回家。
    */
   async function requestHome(current: Trip, reason: HomeReason): Promise<void> {
     if (
-      (reason === 'sent-home' || reason === 'farewell') &&
+      reason === 'sent-home' &&
       (ctx.state.battle !== null || ctx.state.liveBattle !== null || ctx.state.spar?.stage === 'showing')
     ) {
-      // 先记成 sent-home：演完以后按 current.farewell 决定是普通请回还是送友风
       current.pendingHome = 'sent-home';
       return;
     }
@@ -174,7 +172,7 @@ export function createVisitingChat(ctx: FeatureContext): VisitingChat {
       }
       if (ctx.state.trip !== current || !result) return;
       if (!result.ok) {
-        const reason = result.reason === 'sent-home' ? (current.farewell ? 'farewell' : 'sent-home') : 'lost';
+        const reason = result.reason === 'sent-home' ? 'sent-home' : 'lost';
         await requestHome(current, reason);
         return;
       }
@@ -220,9 +218,9 @@ export function createVisitingChat(ctx: FeatureContext): VisitingChat {
       relay(`（在 ${owner} 家吃到了${snack.label}）`);
       ask = GUEST_ASK.treat(snack.label);
     } else if (event.type === 'spar-invite') {
-      // 主人家邀战（X5）：开着修炼就自动应战（§X5 的口径——客人那边关了切磋就忽略，不回话）；
-      // 逐手局（X19）带 mode: 'live'，客人应战后在自己的出招面板里选自家方式；旧主人家邀的全自动局不弹面板
-      void startGuestSpar({ live: event.mode === 'live' });
+      // 主人家邀战（X5）：和修炼无关，客人直接应战（没开修炼也能打）；
+      // 逐手局（X19）带 SPAR_LIVE_MODE，客人应战后在自己的出招面板里选自家方式；旧主人家邀的全自动局不弹面板
+      void startGuestSpar({ live: event.mode === SPAR_LIVE_MODE });
       return;
     } else {
       ask = GUEST_ASK.poke;
@@ -277,8 +275,7 @@ export function createVisitingChat(ctx: FeatureContext): VisitingChat {
       const result = await tripRequest(current.host, '/v1/ping', { token: current.token });
       if (ctx.state.trip !== current) return;
       if (!result.ok) {
-        // 送友风收场的那一场按 farewell 记（X16）：不是「刚进门就被请回去」那种普通送客
-        const reason = result.reason === 'sent-home' ? (current.farewell ? 'farewell' : 'sent-home') : 'lost';
+        const reason = result.reason === 'sent-home' ? 'sent-home' : 'lost';
         await requestHome(current, reason);
         return;
       }

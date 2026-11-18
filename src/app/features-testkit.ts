@@ -7,6 +7,7 @@ import { SKILLS } from './battle';
 import type { SkillId, Fighter } from './battle';
 import { startAppFeatures } from './features';
 import type { FeatureElectron, AppFeatures, FeatureDeps } from './features';
+import { sparFighter } from './spar-rules';
 import { loadVisitIdentity, generateVisitIdentity } from './visit-identity';
 import { knockOn, sparCardOf, VisitHost } from './visit';
 import type { SparCard, DuelAnswer } from './visit';
@@ -295,6 +296,8 @@ export async function withFeatures(
     lockLost?: boolean;
     /** /lock 的应答晚多久（模拟占锁的往返：测第一段演出有没有抢在锁前面） */
     lockDelayMs?: number;
+    /** 由测试手动放行 /lock 的回包。 */
+    lockGate?: Promise<void>;
     /** /whisper 的响应（降级成碎碎念时用） */
     whisper?: Record<string, unknown>;
   },
@@ -330,7 +333,8 @@ export async function withFeatures(
         reply({ ok: false, reason: 'lock-lost', cause: 'preempted' });
       } else if (path.endsWith('/lock')) {
         const granted = { ok: true, lockId: typeof body.lockId === 'string' ? body.lockId : 'show-lock', expiresAt: 0 };
-        if (options.lockDelayMs) setTimeout(() => reply(granted), options.lockDelayMs);
+        if (options.lockGate) void options.lockGate.then(() => reply(granted));
+        else if (options.lockDelayMs) setTimeout(() => reply(granted), options.lockDelayMs);
         else reply(granted);
       } else if (path.endsWith('/broadcast')) {
         bodies.push(body);
@@ -418,6 +422,21 @@ export async function until(check: () => boolean, what = '', tries = 100): Promi
 export function cultivationSave(home: string): Record<string, unknown> | null {
   const path = join(home, 'cultivation.json');
   return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>) : null;
+}
+
+/** 读邻居簿（切磋记账的测试用；没建过文件回空表） */
+export function neighborsSave(home: string): Array<Record<string, unknown>> {
+  const path = join(home, 'neighbors.json');
+  if (!existsSync(path)) return [];
+  return (JSON.parse(readFileSync(path, 'utf8')) as { neighbors: Array<Record<string, unknown>> }).neighbors;
+}
+
+/** 邻居簿上切磋胜负的条数（旧测试里 fightCount 的切磋替代口径） */
+export function sparCount(home: string): number {
+  return neighborsSave(home).reduce(
+    (total, record) => total + Number(record.sparWins ?? 0) + Number(record.sparLosses ?? 0),
+    0,
+  );
 }
 
 /** 招式编号 → 中文名（菜单「领悟：X」的标签用它拼，测试不重复一份表） */
@@ -530,21 +549,13 @@ export function neighborRecord(
   };
 }
 
-/** 客人（阿花）的名帖：炼气二层、扑克牌、化鸽遁（都在 statCap(1) 之内） */
+/** 客人（阿花）的名帖：切磋和修炼解绑后就是固定配装，名帖里的属性由 sparCardOf 统一重建 */
 export function guestCard(): SparCard {
-  return sparCardOf({ name: '阿花', hp: 56, power: 5, agility: 5, speed: 5, weapons: ['poker'], skills: ['dove'] }, 1);
+  return sparCardOf(sparFighter('阿花'), 0);
 }
 
-/** 主人家这边的战斗档案：照 cultivationEarly 的档造的（气血 50、灵力 4 / 身法 4 / 遁速 3、一件水枪、没有招式） */
-export const hostFighter: Fighter = {
-  name: '桌宠',
-  hp: 50,
-  power: 4,
-  agility: 4,
-  speed: 3,
-  weapons: ['water-gun'],
-  skills: [],
-};
+/** 主人家这边的战斗档案：固定切磋配装（230 气血 / 20 三维 / 全法宝全招式） */
+export const hostFighter: Fighter = sparFighter('桌宠');
 
 /** 开接待那套配置（信标绑测试自己的端口、哪儿都不发） */
 export function visitConfig(): AppConfig {

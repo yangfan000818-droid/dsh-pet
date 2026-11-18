@@ -45,11 +45,13 @@ import {
   sparLineRng,
   SPAR_MODE,
   tripRequest,
+  TURN_WAIT_MS,
   VisitHost,
 } from './visit.ts';
-import type { Beacon, DuelAnswer, HostHandlers, SparCard, Visitor } from './visit.ts';
-import { BATTLE_VERSION, SKILL_IDS, WEAPON_IDS, rngFrom } from './battle.ts';
+import type { Beacon, DuelAnswer, HostHandlers, SparCard, SparForfeitReply, Visitor } from './visit.ts';
+import { BATTLE_VERSION, SKILL_IDS, WEAPON_IDS, fight, rngFrom } from './battle.ts';
 import type { Fighter, SkillId, WeaponId } from './battle.ts';
+import { SPAR_OPTIONS, SPAR_STATS, sparFighter } from './spar-rules.ts';
 import { startLiveClient, startLiveServer } from './battle-live.ts';
 import type { LiveVersus } from './battle-live.ts';
 import { swapSides, timeline } from './battle-show.ts';
@@ -927,18 +929,7 @@ test('the guest only trusts a welcome signed for the address it dialed', async (
 
 // ---------- 切磋（X5） ----------
 
-/** 一份合法的名帖（炼气二层：statCap(1) 是气血 61、其余 7，都有余量） */
-const aCard: SparCard = {
-  v: BATTLE_VERSION,
-  stage: 1,
-  hp: 56,
-  power: 5,
-  agility: 5,
-  speed: 5,
-  weapons: ['water-gun', 'poker'],
-  skills: ['dove'],
-};
-
+/** 名帖夹具：引擎 0 号的战斗档案（固定配装，数值与全池不再来自成长） */
 const aFighter: Fighter = {
   name: '小鱼',
   hp: 80,
@@ -949,22 +940,46 @@ const aFighter: Fighter = {
   skills: ['dove', 'critical'],
 };
 
-test('cards: a valid card parses; version mismatches and anything over the codex or statCap is refused', () => {
+/** 固定名帖：230/20/20/20 + 图鉴全池 */
+const aCard: SparCard = sparCardOf(aFighter, 0);
+
+test('spar modes pin the new protocol: fixed-auto for whole-fight, rounds for the synced live path', () => {
+  assert.equal(SPAR_MODE, 'fixed-auto');
+  assert.equal(SPAR_LIVE_MODE, 'rounds');
+});
+
+test('cards: only the exact fixed loadout and current rules version are accepted', () => {
   assert.deepEqual(parseSparCard(aCard), aCard);
-  // 引擎版本不同（含 v 缺失、类型不对）都说「版本」；名帖本身倒是其余不合法都说 bad-card
+  // 名帖本身是固定配装，不看传入的 fighter / stage
+  assert.equal(aCard.hp, SPAR_STATS.hp);
+  assert.equal(aCard.power, SPAR_STATS.power);
+  assert.deepEqual(aCard.weapons, WEAPON_IDS);
+  assert.deepEqual(aCard.skills, SKILL_IDS);
+  assert.deepEqual(sparCardOf({ ...aFighter, hp: 9_999, power: 99 }, 29), aCard, 'sparCardOf 忽略入参');
+  // v10 名帖配装相同，但和 v11 按不同规则算伤害，不能开打。
+  assert.equal(parseSparCard({ ...aCard, v: 10 }), 'version');
   assert.equal(parseSparCard({ ...aCard, v: BATTLE_VERSION + 1 }), 'version');
   assert.equal(parseSparCard({ ...aCard, v: '1' }), 'version');
   assert.equal(parseSparCard('名帖'), 'version');
-  assert.equal(parseSparCard({ ...aCard, hp: 999 }), null, '数值超过该境界的理论上限');
-  assert.equal(parseSparCard({ ...aCard, power: 8 }), null);
-  assert.equal(parseSparCard({ ...aCard, hp: 0 }), null);
-  assert.equal(parseSparCard({ ...aCard, weapons: [...WEAPON_IDS, 'water-gun'] as WeaponId[] }), null, '法宝超过 8 件');
+  // 伪造成长：气血 / 四维不论改高改低都不收
+  assert.equal(parseSparCard({ ...aCard, hp: 999 }), null, '伪造成长');
+  assert.equal(parseSparCard({ ...aCard, hp: aCard.hp + 1 }), null);
+  assert.equal(parseSparCard({ ...aCard, power: aCard.power + 1 }), null);
+  assert.equal(parseSparCard({ ...aCard, agility: aCard.agility - 1 }), null);
+  assert.equal(parseSparCard({ ...aCard, speed: 21 }), null);
+  // 删招 / 加招 / 换顺序也都不收：只认同一张固定卡
+  assert.equal(parseSparCard({ ...aCard, weapons: aCard.weapons.slice(1) }), null, '删法宝');
+  assert.equal(parseSparCard({ ...aCard, skills: aCard.skills.slice(1) }), null, '删招式');
+  assert.equal(parseSparCard({ ...aCard, weapons: [...aCard.weapons].reverse() }), null, '顺序也必须一致');
+  assert.equal(parseSparCard({ ...aCard, weapons: [...WEAPON_IDS, 'water-gun'] as WeaponId[] }), null);
   assert.equal(parseSparCard({ ...aCard, weapons: ['nunchaku'] }), null, '法宝编号不认识');
-  assert.equal(parseSparCard({ ...aCard, skills: [...SKILL_IDS, 'dove'] }), null, '招式超过 10 个');
+  assert.equal(parseSparCard({ ...aCard, skills: [...SKILL_IDS, 'dove'] }), null);
   assert.equal(parseSparCard({ ...aCard, stage: 99 }), null, '境界出格');
+  assert.equal(parseSparCard({ ...aCard, stage: aCard.stage - 1 }), null, '境界也必须是固定值');
   assert.equal(parseSparCard({ ...aCard, stage: -1 }), null);
-  // 名帖与战斗档案互转，数值一件不少
-  assert.deepEqual(cardFighter('阿花', sparCardOf(aFighter, 3)), { ...aFighter, name: '阿花' });
+  // 名帖 → Fighter 从固定配装重建，只信名字，不信入站数值
+  assert.deepEqual(cardFighter('阿花', aCard), sparFighter('阿花'));
+  assert.deepEqual(cardFighter('阿花', { ...aCard, hp: 1, skills: [] }), sparFighter('阿花'));
 });
 
 test('nonces and commits: 32-byte hex in, sha256 hex out', () => {
@@ -993,6 +1008,7 @@ test('sparFight: both sides compute the same fight, the host is actor 0, and the
   const events = sparFight(aFighter, guest, guestNonce, hostNonce);
   // 两边各自调，事件序列逐个相同（§X5 第 5 步）
   assert.deepEqual(sparFight(aFighter, guest, guestNonce, hostNonce), events);
+  assert.deepEqual(events, fight(aFighter, guest, `${guestNonce}:${hostNonce}`, undefined, SPAR_OPTIONS));
   assert.equal(events[0].kind, 'start');
   assert.equal(events[0].actor, 0, '主人家是 actor 0');
   assert.equal(events[0].hp[0], aFighter.hp);
@@ -1000,7 +1016,7 @@ test('sparFight: both sides compute the same fight, the host is actor 0, and the
   assert.notDeepEqual(sparFight(aFighter, guest, hostNonce, guestNonce), events);
 });
 
-test('sparFight: 串门送友风开关两边各算同一场，不传就没有 farewell 收场（X16）', () => {
+test('sparFight: 同步轮口径不启用送友风送走；旧时间轴的 farewell 路径照旧', () => {
   const host: Fighter = {
     ...aFighter,
     name: '主人家',
@@ -1018,21 +1034,27 @@ test('sparFight: 串门送友风开关两边各算同一场，不传就没有 fa
     skills: [],
   };
   const hostNonce = 'b'.repeat(64);
-  let sent: { guestNonce: string; events: ReturnType<typeof sparFight> } | null = null;
-  for (let i = 0; i < 80 && sent === null; i++) {
+  // 独立切磋（SPAR_OPTIONS 带 sparMode）里不再有送友风送走：farewell 开关也盖不过 sparMode
+  for (let i = 0; i < 20; i++) {
     const guestNonce = i.toString(16).padStart(64, '0');
     const events = sparFight(host, guest, guestNonce, hostNonce, { farewell: true });
+    assert.deepEqual(
+      events,
+      fight(host, guest, `${guestNonce}:${hostNonce}`, undefined, { ...SPAR_OPTIONS, farewell: true }),
+    );
+    assert.ok(!events.some((event) => event.kind === 'end' && event.reason === 'farewell'));
+  }
+  // 旧 PvE 口径（不带 sparMode）仍能送走：legacy 路径留给旧玩法 / 旧测试
+  let sent: { guestNonce: string; events: ReturnType<typeof fight> } | null = null;
+  for (let i = 0; i < 80 && sent === null; i++) {
+    const guestNonce = i.toString(16).padStart(64, '0');
+    const events = fight(host, guest, `${guestNonce}:${hostNonce}`, undefined, { farewell: true });
     const end = events[events.length - 1];
     if (end.kind === 'end' && end.reason === 'farewell') sent = { guestNonce, events };
   }
-  assert.ok(sent, '该有一个种子在串门里把客人送走');
-  // 两边各自调 sparFight（主人家 / 客人）算出同一串；种子顺序仍钉住
-  assert.deepEqual(sparFight(host, guest, sent!.guestNonce, hostNonce, { farewell: true }), sent!.events);
+  assert.ok(sent, '旧口径该有一个种子把客人送走');
   const last = sent!.events[sent!.events.length - 1];
   assert.equal(last?.kind === 'end' && last.winner, 0, '主人家（施放方）赢');
-  // 不传 farewell：同一对随机数不会再送走
-  const plain = sparFight(host, guest, sent!.guestNonce, hostNonce);
-  assert.ok(!plain.some((event) => event.kind === 'end' && event.reason === 'farewell'));
 });
 
 test('sparLineRng: 同一对随机数给出同一串、换个顺序就不同（两边的解说才会一致）', () => {
@@ -1104,7 +1126,7 @@ test("a spar challenge goes through with the host's card and nonce, and the reve
       });
       assert.ok(reply.ok);
       assert.equal(reply.ok && reply.nonce, 'b'.repeat(64));
-      assert.ok(reply.ok && reply.card.v === BATTLE_VERSION && reply.card.stage === 4);
+      assert.ok(reply.ok && reply.card.v === BATTLE_VERSION && reply.card.stage === aCard.stage);
       // 应答里的名帖与随机数也照对方的规矩验过一遍（坏的要当 bad-card）
       assert.deepEqual(await sendReveal(target, { token, nonce: 'c'.repeat(64), line: '  你好\u202e呀\n' }), {
         ok: true,
@@ -1133,6 +1155,9 @@ test('a spar is refused with the right reason for each kind of wrong before the 
       const ask = (body: Record<string, unknown>) =>
         sendSpar(target, { token, mode: SPAR_MODE, card: aCard, commit: sparCommit('c'.repeat(64)), ...body });
       assert.deepEqual(await ask({ mode: 'manual' }), { ok: false, reason: 'unsupported-mode' });
+      // 旧端的 auto / live 不再接受：规则算不出同一场，不能静默降级
+      assert.deepEqual(await ask({ mode: 'auto' }), { ok: false, reason: 'unsupported-mode' });
+      assert.deepEqual(await ask({ mode: 'live' }), { ok: false, reason: 'unsupported-mode' });
       assert.deepEqual(await ask({ commit: 'nope' }), { ok: false, reason: 'bad-request' });
       assert.deepEqual(await ask({ card: { ...aCard, v: BATTLE_VERSION + 1 } }), { ok: false, reason: 'version' });
       assert.deepEqual(await ask({ card: { ...aCard, hp: 999 } }), { ok: false, reason: 'bad-card' });
@@ -1226,6 +1251,7 @@ test("the guest also checks the host's reply card, nonce and reasons like everyt
 
 test('a spar invite rides the next ping, and parseEvents keeps it while still dropping unknown kinds', async () => {
   assert.deepEqual(parseEvents([{ type: 'spar-invite' }]), [{ type: 'spar-invite' }]);
+  assert.deepEqual(parseEvents([{ type: 'spar-invite', mode: 'rounds' }]), [{ type: 'spar-invite', mode: 'rounds' }]);
   assert.deepEqual(parseEvents([{ type: 'spar-invite', mode: 'live' }]), [{ type: 'spar-invite', mode: 'live' }]);
   assert.deepEqual(parseEvents([{ type: 'spar-invite', mode: '别的' }]), [{ type: 'spar-invite' }]);
   assert.deepEqual(parseEvents([{ type: 'spar-invite' }, { type: 'dance' }, null]), [{ type: 'spar-invite' }]);
@@ -1347,7 +1373,8 @@ test('隔空切磋：签名挑战 → 应战 → 亮随机数 → 两边算出�
       assert.equal(reply.ok && reply.nonce, hostNonce);
       assert.match(reply.ok ? reply.token : '', /^[0-9a-f]{32}$/);
       // 应战方手里是挑战方的名帖；挑战方手里是应战方的名帖：两边各自算同一场，应战方是 0 号
-      const fight = sparFight(aFighter, cardFighter(me.pet, aCard), guestNonce, hostNonce);
+      const hostFighter = cardFighter('阿花', aCard);
+      const fight = sparFight(hostFighter, cardFighter(me.pet, aCard), guestNonce, hostNonce);
       assert.equal(fight[0].kind, 'start');
       assert.equal(fight[0].actor, 0, '应战方是 0 号');
       assert.deepEqual(
@@ -1799,7 +1826,7 @@ test('隔空切磋：旧对端（404 / 被 session 挡回）映射成 old-host�
   }
 });
 
-// ---------- 逐手对传（X19） ----------
+// ---------- 同步轮对传 ----------
 
 test('parseSparAction / parseTurnIndex：只认图鉴里的编号，序号从 0 起', () => {
   assert.deepEqual(parseSparAction({ kind: 'weapon', weapon: 'water-gun' }), { kind: 'weapon', weapon: 'water-gun' });
@@ -1853,42 +1880,41 @@ test('逐手局：两边走 /v1/spar/turn 对传，算出同一串事件；坏�
       });
       assert.ok(reply.ok, `逐手切磋应战没成：${JSON.stringify(reply)}`);
       assert.equal(sawLive, true, 'mode: live 传到了 handlers.spar');
-      assert.deepEqual(await sendReveal(target, { token, nonce: guestNonce, line: '' }), { ok: true });
-      // 坏令牌 / 坏出手形状都在协议层挡掉（不会递进这一场）
-      assert.deepEqual(await sendSparTurn(target, { token: '0'.repeat(32), index: 0 }), {
+      const match = reply.nonce;
+      assert.deepEqual(await sendSparTurn(target, { token, match, index: 0 }), { ok: false, reason: 'late' });
+      assert.deepEqual(await sendReveal(target, { token, match, nonce: guestNonce, line: '' }), { ok: true });
+      // 坏令牌 / 轮局标识 / 坏出手形状都不会递进这一场。
+      assert.deepEqual(await sendSparTurn(target, { token: '0'.repeat(32), match, index: 0 }), {
         ok: false,
         reason: 'not-visiting',
       });
+      assert.deepEqual(await sendSparTurn(target, { token, match: 'e'.repeat(64), index: 0 }), {
+        ok: false,
+        reason: 'late',
+      });
       assert.deepEqual(
-        await sendSparTurn(target, { token, index: 0, action: { kind: 'weapon', weapon: 'nope' } as never }),
+        await sendSparTurn(target, { token, match, index: 0, action: { kind: 'weapon', weapon: 'nope' } as never }),
         { ok: false, reason: 'bad-request' },
       );
-      // 应战方（主人家）这一侧按后备挑法出；发起方（客人）这一侧也走同一套驱动
-      live = startLiveServer({
-        a: cardFighter('小鱼', reply.ok ? reply.card : aCard),
-        b: { ...aFighter, name: '小王' },
+      // 两边独立重放同一套同步轮规则。
+      const options = {
+        ...SPAR_OPTIONS,
+        a: sparFighter('小鱼'),
+        b: sparFighter('小王'),
         seed,
-        local: 0,
         show: silent,
-        lineRng: rngFrom(`${seed}:lines`),
         decide: async () => null,
         think: () => undefined,
         log: () => undefined,
         waitMs: 2_000,
-      });
+      };
+      live = startLiveServer({ ...options, local: 0, lineRng: rngFrom(`${seed}:lines`) });
       live.skip();
       const client = startLiveClient({
-        a: cardFighter('小鱼', reply.ok ? reply.card : aCard),
-        b: { ...aFighter, name: '小王' },
-        seed,
+        ...options,
         local: 1,
-        show: silent,
         lineRng: rngFrom(`${seed}:lines`),
-        decide: async () => null,
-        think: () => undefined,
-        log: () => undefined,
-        waitMs: 2_000,
-        sendTurn: (body, signal) => sendSparTurn(target, { token, ...body }, signal),
+        sendTurn: (body, signal) => sendSparTurn(target, { token, match, ...body }, signal),
       });
       client.skip();
       const [clientEvents, serverEvents] = await Promise.all([client.done, live.done]);
@@ -1899,7 +1925,7 @@ test('逐手局：两边走 /v1/spar/turn 对传，算出同一串事件；坏�
   );
 });
 
-test('逐手局：对面出的招不合法、等超时，都按掉线', async () => {
+test('同步轮：应用对出招的 illegal 拒绝由串门路由如实返回', async () => {
   // 这一条在 battle-live.test.ts 里按驱动测过；这里核 features 的出口能拿到同样的原因
   let illegal: Awaited<ReturnType<typeof sendSparTurn>> | undefined;
   await withHost(
@@ -1913,8 +1939,9 @@ test('逐手局：对面出的招不合法、等超时，都按掉线', async ()
       const [answer] = await knockAndAnswer(_host, port, true);
       const token = answer.ok ? answer.token : '';
       await sendSpar(target, { token, mode: SPAR_LIVE_MODE, card: aCard, commit: sparCommit('c'.repeat(64)) });
-      await sendReveal(target, { token, nonce: 'c'.repeat(64), line: '' });
-      illegal = await sendSparTurn(target, { token, index: 0, action: { kind: 'weapon', weapon: 'poker' } });
+      const match = 'b'.repeat(64);
+      await sendReveal(target, { token, match, nonce: 'c'.repeat(64), line: '' });
+      illegal = await sendSparTurn(target, { token, match, index: 0, action: { kind: 'weapon', weapon: 'poker' } });
     },
   );
   assert.deepEqual(illegal, { ok: false, reason: 'illegal' });
@@ -1928,32 +1955,94 @@ test('逐手局协议：forfeit 经 /v1/spar/turn 结构校验后递给 sparTurn
       reveal: async () => ({ ok: true }),
       sparTurn: async (_visitor, index, action, forfeit) => {
         seen.push({ index, action, forfeit });
-        return { ok: true, forfeit: true };
+        return { ok: true, forfeit: true, loser: 1, round: 2, action: { kind: 'unarmed' } };
       },
     },
     async (host, port) => {
       const target = { address: '127.0.0.1', port };
       const [answer] = await knockAndAnswer(host, port, true);
       const token = answer.ok ? answer.token : '';
+      const match = 'b'.repeat(64);
       await sendSpar(target, { token, mode: SPAR_LIVE_MODE, card: aCard, commit: sparCommit('c'.repeat(64)) });
-      await sendReveal(target, { token, nonce: 'c'.repeat(64), line: '' });
-
-      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: true }), {
+      assert.deepEqual(await sendReveal(target, { token, match, nonce: 'c'.repeat(64), line: '' }), { ok: true });
+      const turn = { token, match, index: 2 };
+      assert.deepEqual(await sendSparTurn(target, { ...turn, forfeit: true }), {
         ok: true,
         forfeit: true,
+        loser: 1,
+        round: 2,
+        action: { kind: 'unarmed' },
       });
       assert.deepEqual(seen, [{ index: 2, action: undefined, forfeit: true }]);
 
       // 认输不能夹带出手；forfeit 只认布尔值。结构不对的不会递进这一场
-      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: true, action: { kind: 'unarmed' } }), {
+      assert.deepEqual(await sendSparTurn(target, { ...turn, forfeit: true, action: { kind: 'unarmed' } }), {
         ok: false,
         reason: 'bad-request',
       });
-      assert.deepEqual(await sendSparTurn(target, { token, index: 2, forfeit: 'yes' as never }), {
+      assert.deepEqual(await sendSparTurn(target, { ...turn, forfeit: 'yes' as never }), {
         ok: false,
         reason: 'bad-request',
       });
       assert.equal(seen.length, 1);
+    },
+  );
+});
+
+test('串门同步轮：回执只认本场和正确令牌，下一场照常开打，到期后不再返回', async () => {
+  let clock = 0;
+  let nextNonce = 'b'.repeat(64);
+  const guestNonce = 'c'.repeat(64);
+  const end: SparForfeitReply = { ok: true, forfeit: true, loser: 0, round: 1, action: { kind: 'unarmed' } };
+  let turns = 0;
+  await withHost(
+    {
+      now: () => clock,
+      spar: async () => ({ ok: true, card: aCard, nonce: nextNonce }),
+      reveal: async () => ({ ok: true }),
+      sparTurn: async () => {
+        turns++;
+        return { ok: true, action: { kind: 'weapon', weapon: 'poker' } };
+      },
+    },
+    async (host, port) => {
+      const target = { address: '127.0.0.1', port };
+      const [answer, visitor] = await knockAndAnswer(host, port, true);
+      assert.ok(answer.ok && visitor);
+      const token = answer.token;
+      const start = async () => {
+        const reply = await sendSpar(target, {
+          token,
+          mode: SPAR_LIVE_MODE,
+          card: aCard,
+          commit: sparCommit(guestNonce),
+        });
+        assert.ok(reply.ok);
+        assert.deepEqual(await sendReveal(target, { token, match: reply.nonce, nonce: guestNonce, line: '' }), {
+          ok: true,
+        });
+        return reply.nonce;
+      };
+      const first = await start();
+      host.rememberSparEnd(visitor, first, end);
+      nextNonce = 'd'.repeat(64);
+      const second = await start();
+      const late = { token, match: first, index: 0, forfeit: true } as const;
+      assert.deepEqual(await sendSparTurn(target, late), end);
+      assert.equal(turns, 0, '旧回执不递进新一场');
+      assert.deepEqual(await sendSparTurn(target, { token, match: second, index: 0, action: { kind: 'unarmed' } }), {
+        ok: true,
+        action: { kind: 'weapon', weapon: 'poker' },
+      });
+      assert.deepEqual(await sendSparTurn(target, { ...late, index: 2 }), { ok: false, reason: 'late' });
+      assert.deepEqual(await sendSparTurn(target, { ...late, token: '0'.repeat(32) }), {
+        ok: false,
+        reason: 'not-visiting',
+      });
+      host.sendHome();
+      assert.deepEqual(await sendSparTurn(target, late), end, '请客人回家不影响已经算好的结局');
+      clock += TURN_WAIT_MS;
+      assert.deepEqual(await sendSparTurn(target, late), { ok: false, reason: 'sent-home' });
     },
   );
 });

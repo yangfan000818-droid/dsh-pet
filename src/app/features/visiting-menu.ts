@@ -3,7 +3,7 @@ import { notesAllowed, orderNeighbors } from '../neighbors';
 import { PLAY_THINGS } from '../visit-talk';
 import { NOTE_GAP_MS, NOTE_MAX, sendNote } from '../visit';
 import type { NoteReply } from '../visit';
-import { MENU_CULTIVATION_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
+import { MENU_SPAR_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
 import { errorText } from './util';
 
@@ -23,7 +23,6 @@ export function createVisitingMenu(ctx: FeatureContext): VisitingMenu {
   const {
     answerDuel,
     comeHome,
-    cultivationOn,
     goVisit,
     inviteSpar,
     letIn,
@@ -46,10 +45,10 @@ export function createVisitingMenu(ctx: FeatureContext): VisitingMenu {
     // 隔空切磋（X15）：有人挑战、等主人答复时，两项应答和敲门的「让进 / 不让进」同一优先级
     const waiting = ctx.state.duelWait;
     if (waiting) {
-      actions.set(`${MENU_CULTIVATION_GROUP}/应战：${waiting.visitor.owner} 家的 ${waiting.visitor.pet}`, () =>
+      actions.set(`${MENU_SPAR_GROUP}/应战：${waiting.visitor.owner} 家的 ${waiting.visitor.pet}`, () =>
         answerDuel(true),
       );
-      actions.set(`${MENU_CULTIVATION_GROUP}/不应战`, () => answerDuel(false));
+      actions.set(`${MENU_SPAR_GROUP}/不应战`, () => answerDuel(false));
       return actions;
     }
     const knocking = ctx.state.visitHost?.knocking();
@@ -60,16 +59,9 @@ export function createVisitingMenu(ctx: FeatureContext): VisitingMenu {
       actions.set(`不让 ${knocking.pet} 进来`, () => letIn(false));
     } else if (guest) {
       actions.set(`请 ${guest.pet} 回家`, sendGuestHome);
-      // 切磋（X5）：开着修炼、没在打、客人是验证过身份的（奖励与邻居簿都靠 id 记）时才有
-      if (
-        cultivationOn() &&
-        guest.id &&
-        !ctx.state.spar &&
-        !ctx.state.battle &&
-        !ctx.state.liveBattle &&
-        !ctx.state.actionPanel
-      )
-        actions.set(`${MENU_VISIT_GROUP}/和客人切磋`, () => void inviteSpar());
+      // 切磋（X5）：和修炼无关，客人有稳定 id、没在打时就有（邻居簿靠 id 记）
+      if (guest.id && !ctx.state.spar && !ctx.state.battle && !ctx.state.liveBattle && !ctx.state.actionPanel)
+        actions.set(`${MENU_SPAR_GROUP}/和客人切磋`, () => void inviteSpar());
       for (const thing of PLAY_THINGS) actions.set(`和 ${guest.pet} 一起玩/${thing.label}`, () => playTogether(thing));
       for (const snack of pouch.kinds()) actions.set(`请 ${guest.pet} 吃/${snack.label}`, () => treatGuest(snack));
       // 只对验证过身份的客人提供熟人开关：陌生人没身份可标，冒名的也不能被拉成熟人
@@ -80,9 +72,9 @@ export function createVisitingMenu(ctx: FeatureContext): VisitingMenu {
         actions.set(`捎话给 ${guest.owner}`, () => void fireNote(noteViaGuest()));
     } else if (ctx.state.trip) {
       actions.set(`从 ${ctx.state.trip.host.owner} 家回来`, () => comeHome('called'));
-      // 切磋（X5）：开着修炼、没在打时才有（在别人家做客，对面是主人家的宠物）
-      if (cultivationOn() && !ctx.state.spar && !ctx.state.battle && !ctx.state.liveBattle && !ctx.state.actionPanel)
-        actions.set(`${MENU_VISIT_GROUP}/找主人家的宠物切磋`, () => void startGuestSpar());
+      // 切磋（X5）：和修炼无关，没在打时就有（在别人家做客，对面是主人家的宠物）
+      if (!ctx.state.spar && !ctx.state.battle && !ctx.state.liveBattle && !ctx.state.actionPanel)
+        actions.set(`${MENU_SPAR_GROUP}/找主人家的宠物切磋`, () => void startGuestSpar());
       const hostId = ctx.state.trip.host.id;
       // 只对验证过身份的主人家提供熟人开关（trip.verified：见 startTrip）；捎话也只对熟人家开
       if (ctx.state.trip.verified)

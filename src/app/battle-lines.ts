@@ -183,6 +183,8 @@ export function lineOf(
   switch (event.kind) {
     case 'start':
     case 'decide':
+    case 'round-action':
+    case 'round-end':
       return null;
     case 'hit': {
       const lines = event.surge
@@ -262,12 +264,9 @@ export function lineOf(
     case 'field':
       return fill(pick(FIELD_LINES), a, b, event.damage);
     case 'end':
-      return fill(
-        pick(
-          event.reason === 'farewell' ? FAREWELL_END_LINES : event.reason === 'forfeit' ? FORFEIT_END_LINES : END_LINES,
-        ),
-        a,
-        b,
-      );
+      if (event.draw) return `${a}和${b}打成平手，点到为止～`;
+      if (event.reason === 'forfeit')
+        return fill(pick(FORFEIT_END_LINES), names[event.winner], names[event.winner ^ 1]);
+      return fill(pick(event.reason === 'farewell' ? FAREWELL_END_LINES : END_LINES), a, b);
   }
 }

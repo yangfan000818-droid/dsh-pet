@@ -5,7 +5,7 @@ import type { CultivationEvent } from '../cultivation';
 import { foeStage, homeStage, openFxWindow } from '../fx-window';
 import type { FxWindow, Stage } from '../fx-window';
 import type { Rect } from '../visit-windows';
-import { MENU_CULTIVATION_GROUP, lazyFns } from './context';
+import { MENU_CULTIVATION_GROUP, MENU_SPAR_GROUP, lazyFns } from './context';
 import type { FeatureContext, SayOptions } from './context';
 import { errorText } from './util';
 
@@ -17,6 +17,7 @@ export interface Practice {
   playPooled(name: string, rate: number): Promise<void>;
   openShowFx(foeBounds: () => Rect | null, foeOnLeft: () => boolean, foeShadow?: boolean): FxWindow;
   cultivationActions(): Map<string, () => unknown>;
+  battleActions(): Map<string, () => unknown>;
 }
 
 export function createPractice(ctx: FeatureContext): Practice {
@@ -203,12 +204,11 @@ export function createPractice(ctx: FeatureContext): Practice {
         });
       }
     }
-    // 心魔试炼：没在打、没出门、家里没客人、也没有挂着的隔空挑战时才有；打的时候换成「快进」
-    if (ctx.state.battle || ctx.state.liveBattle) {
-      actions.set(`${MENU_CULTIVATION_GROUP}/快进`, skipTrial);
-      // 认输（X26）：只有心魔 / 切磋开打时注册了收尾回调才有；二次确认在单独一块小面板里问
-      if (ctx.state.forfeitNow) actions.set(`${MENU_CULTIVATION_GROUP}/认输`, () => void forfeitBattle());
-    } else if (
+    // 心魔试炼：没在打、没出门、家里没客人、也没有挂着的隔空挑战时才有。
+    // 「快进 / 认输」由 battleActions 提供（和修炼解绑，切磋关着修炼也要有）
+    if (
+      !ctx.state.battle &&
+      !ctx.state.liveBattle &&
       ctx.state.trip === null &&
       ctx.state.hosting === null &&
       ctx.state.duelWait === null &&
@@ -218,5 +218,20 @@ export function createPractice(ctx: FeatureContext): Practice {
       actions.set(`${MENU_CULTIVATION_GROUP}/心魔试炼`, () => void runTrial());
     return actions;
   }
-  return { cultivationOn, onCultivation, playExtra, playPooled, openShowFx, cultivationActions };
+
+  /**
+   * 战斗中通用的两项（X17 / X26）：快进和认输本身和修炼无关，心魔、切磋、隔空都用同一套处理。
+   * 开着修炼仍挂在「修炼/」下（原菜单不变）；关着修炼时挂到独立的「切磋/」根菜单，
+   * 切切磋照样能快进 / 认输。放在 wantedLabels 的固定项之后，不会被邻居 / 挑战项挤出 24 项上限。
+   */
+  function battleActions(): Map<string, () => unknown> {
+    const actions = new Map<string, () => unknown>();
+    if (!ctx.state.battle && !ctx.state.liveBattle) return actions;
+    const group = cultivationOn() ? MENU_CULTIVATION_GROUP : MENU_SPAR_GROUP;
+    actions.set(`${group}/快进`, skipTrial);
+    // 认输（X26）：只有心魔 / 切磋开打时注册了收尾回调才有；二次确认在单独一块小面板里问
+    if (ctx.state.forfeitNow) actions.set(`${group}/认输`, () => void forfeitBattle());
+    return actions;
+  }
+  return { cultivationOn, onCultivation, playExtra, playPooled, openShowFx, cultivationActions, battleActions };
 }

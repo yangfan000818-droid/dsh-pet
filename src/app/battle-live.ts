@@ -7,23 +7,26 @@
  */
 import {
   MOVES,
+  ROUND_SURE_WEAPON_HP_SHARE,
   SKILLS,
   WEAPONS,
   fallbackAction,
   fightUntilDecision,
   legalActions,
+  rngFrom,
   type Action,
   type BattleEvent,
   type BattleView,
   type Fighter,
+  type FightOptions,
   type MoveId,
   type SkillId,
   type WeaponId,
 } from './battle';
 import { BattleShow, LiveTimeline, swapSides, type ShowSides, type Step, type TimelineOptions } from './battle-show';
 import type { StandaloneAiService } from '../standalone/ai-provider';
-import { cleanText } from './visit';
-import type { SparTurnReply } from './visit';
+import { cleanText, sparEndTurnReply } from './visit';
+import type { SparEndReceipt, SparForfeitReply, SparTurnReply } from './visit';
 
 /** 一手：动作 + AI 可选的一句台词（20 字以内） */
 export interface TurnDecision {
@@ -60,11 +63,15 @@ export interface LegalChoice {
   tone: ActionTone;
 }
 
-function weaponEffect(id: WeaponId): string {
+function weaponEffect(id: WeaponId, rounds = false): string {
   const w = WEAPONS[id];
   const bits = [`伤害 ${w.min}–${w.max}`];
   if (w.hits > 1) bits.push(`${w.hits} 段`);
   if (w.mustHit) bits.push('必中');
+  if (rounds && w.returnSure) bits.push('回旋段必中');
+  if (rounds && (w.mustHit || w.returnSure))
+    bits.push(`必中段吃 ${Math.round(ROUND_SURE_WEAPON_HP_SHARE * 100)}% 破势`);
+  if (rounds && id === 'firework') bits.push('不连击');
   if (w.ranged) bits.push('远程');
   if (w.skipChance > 0) bits.push(w.skipCause === 'freeze' ? '可能冻住' : '可能打晕');
   if (w.slow) bits.push('可能迟缓');
@@ -160,6 +167,30 @@ export function actionEffect(action: Action, spar = false): string {
   return '伤害 3–6';
 }
 
+const ROUND_EFFECT: Partial<Record<SkillId, string>> = {
+  bloom: '回复18%气血，占用本轮动作',
+  'lion-roar': '伤害并可能让对方跳过下一轮（可闪避）',
+  'whale-song': '伤害并可能让对方跳过下一轮（可闪避）',
+  'dream-chant': '伤害并可能让对方跳过下一轮（可闪避）',
+  'farewell-wind': '伤害并可能让对方跳过下一轮，不会直接送走（可闪避）',
+  'myriad-palm': '伤害，命中后封住对方下一轮法宝（可闪避）',
+  'ghost-hand': '伤害，命中后封住对方下一轮主动技（可闪避）',
+  'ghost-painting': '从下轮起封住对方一门被动（可闪避；没有被动就改成伤害）',
+  'abyss-field': '本轮起3轮攻击必中，后2轮对方行动前受暗流伤害',
+  'tide-cannon': '本轮聚气减伤，下次能出手时自动释放必中水浪',
+};
+
+function roundActionEffect(action: Action): string {
+  if (action.kind === 'skill') return ROUND_EFFECT[action.skill] ?? actionEffect(action, true);
+  if (action.kind === 'weapon') {
+    const weapon = WEAPONS[action.weapon];
+    if (weapon.slow) return '普通伤害；同步轮内迟缓不增加行动次数';
+    if (weapon.heavy) return '重击；同步轮每方仍各行动一次';
+    return weaponEffect(action.weapon, true);
+  }
+  return actionEffect(action, true);
+}
+
 /** 手动面板按主要效果分成伤害、控制、回复与保命三组 */
 export function toneOf(action: Action): ActionTone {
   if (action.kind === 'weapon') {
@@ -192,7 +223,7 @@ export function legalChoices(view: BattleView): LegalChoice[] {
       action,
       label: actionLabel(action),
       ...(note ? { note } : {}),
-      effect: actionEffect(action, spar),
+      effect: view.round !== undefined ? roundActionEffect(action) : actionEffect(action, spar),
       tone: toneOf(action),
     };
   });
@@ -202,9 +233,9 @@ function namesOf(view: BattleView, names: [string, string]): { me: string; foe: 
   return { me: names[view.self], foe: names[view.self === 0 ? 1 : 0] };
 }
 
-function listSkills(skills: SkillId[], spar = false): string {
+function listSkills(skills: SkillId[], effect: (action: Action) => string): string {
   return skills.length > 0
-    ? skills.map((id) => `${SKILLS[id].name}（${actionEffect({ kind: 'skill', skill: id }, spar)}）`).join('、')
+    ? skills.map((id) => `${SKILLS[id].name}（${effect({ kind: 'skill', skill: id })}）`).join('、')
     : '无';
 }
 
@@ -219,6 +250,8 @@ function listMoves(moves: MoveId[] | undefined): string {
 export function turnPrompt(view: BattleView, names: [string, string]): string {
   const { me, foe } = namesOf(view, names);
   const spar = view.you.skillUsesLeft !== undefined;
+  const rounds = view.round !== undefined;
+  const effect = rounds ? roundActionEffect : (action: Action) => actionEffect(action, spar);
   const usedSkills = view.you.used.map((id) => SKILLS[id].name);
   const usedMoves = view.you.moveUses ?? [];
   const usedMoveText = [...new Set(usedMoves)].map(
@@ -228,11 +261,17 @@ export function turnPrompt(view: BattleView, names: [string, string]): string {
   return [
     `你是${me}，在和${foe}对战。`,
     `你的气血 ${view.hp[view.self]}/${view.maxHp[view.self]}；对方气血 ${view.hp[view.self === 0 ? 1 : 0]}/${view.maxHp[view.self === 0 ? 1 : 0]}。`,
-    `你的法宝：${view.you.weapons.length > 0 ? view.you.weapons.map((id) => `${WEAPONS[id].name}（${weaponEffect(id)}）`).join('、') : '无'}。`,
-    `你的招式：${listSkills(view.you.skills, spar)}${view.you.moves && view.you.moves.length > 0 ? `；${listMoves(view.you.moves)}` : ''}。`,
+    `你的法宝：${view.you.weapons.length > 0 ? view.you.weapons.map((id) => `${WEAPONS[id].name}（${effect({ kind: 'weapon', weapon: id })}）`).join('、') : '无'}。`,
+    `你的招式：${listSkills(view.you.skills, effect)}${view.you.moves && view.you.moves.length > 0 ? `；${listMoves(view.you.moves)}` : ''}。`,
     `对方的法宝：${view.foe.weapons.length > 0 ? view.foe.weapons.map((id) => WEAPONS[id].name).join('、') : '无'}。`,
-    `对方的招式：${listSkills(view.foe.skills, spar)}。`,
+    `对方的招式：${listSkills(view.foe.skills, effect)}。`,
     `这一场你已经用掉：${used.length > 0 ? used.join('、') : '无'}。`,
+    ...(view.round !== undefined
+      ? [
+          `第${view.round + 1}轮：双方先锁动作再完整结算，本轮控制或封招不会取消已锁动作；双亡为平局。`,
+          `你的公开状态：${JSON.stringify(view.you.status)}；对方公开状态：${JSON.stringify(view.foe.status)}。`,
+        ]
+      : []),
     '这一手可以选：',
     ...legalChoices(view).map(
       (choice) => `${choice.pick}. ${choice.label}（${choice.effect}${choice.note ? `，${choice.note}` : ''}）`,
@@ -528,9 +567,9 @@ export function startLiveBattle(options: LiveBattleOptions): LiveBattle {
 
 // ---------- 逐手对传（X19：串门切磋 / 隔空切磋） ----------
 
-/** 逐手局一手的应答（协议层的 SparTurnReply 与此同形；battle-live 不认识网络） */
+/** 逐手局一手的应答；同步轮的认输额外标明是哪一边认输。 */
 export type LiveTurnReply =
-  { ok: true; action?: Action; forfeit?: true } | { ok: false; reason: 'illegal' | 'late' | 'busy' | 'not-visiting' };
+  Extract<SparTurnReply, { ok: true }> | { ok: false; reason: 'illegal' | 'late' | 'busy' | 'not-visiting' };
 
 /** 逐手对传两边共用的一份：本地是引擎几号、本地这一手怎么定、怎么把一段一段演出来 */
 export interface LiveVersusOptions {
@@ -549,6 +588,11 @@ export interface LiveVersusOptions {
   damageScale?: number;
   /** 单次伤害封顶（X23）：只给切磋 / 隔空传，两边必须一致；不传不封顶 */
   maxHitShare?: number;
+  /**
+   * 独立切磋的引擎口径：`'rounds'` = 同轮双方先锁动作再一起结算（引擎给双侧视野、每轮双方各一手）。
+   * 不传保留旧的单边出招（心魔 / 旧测试）；两边必须一致。
+   */
+  sparMode?: 'opening' | 'rounds';
   /** 本地这一手：返回 null（超时 / 没选 / 收摊）就按后备挑法出 */
   decide: (view: BattleView, index: number, signal: AbortSignal) => Promise<TurnDecision | null>;
   /** 演完一段、本地这一手还没定：宠物头上「想一想…」 */
@@ -575,6 +619,8 @@ export interface LiveClientOptions extends LiveVersusOptions {
 export interface LiveServerOptions extends LiveVersusOptions {
   /** 等对面下一手的时限（35 秒没来就当掉线） */
   waitMs: number;
+  /** 同步轮已确定的结局；协议层在会话收掉后仍能回最后一轮。 */
+  onEnd?: (receipt: SparEndReceipt) => void;
 }
 
 /** 一场逐手对传：`done` 在演完 / 掉线 / 收摊时结算（掉线、收摊回 null） */
@@ -607,6 +653,195 @@ function isLegal(view: BattleView, action: Action): boolean {
   return legalActions(view).some((item) => sameAction(item, action));
 }
 
+/**
+ * 同步轮里引擎已经替这一侧定了动作（受控跳过 / 聚气自动释放 / 假死躺一拍）：
+ * 玩家和 AI 都不用再选，直接空手占位，手动面板也不弹。
+ */
+function roundsPlaceholder(view: BattleView): boolean {
+  const status = view.you.status;
+  return status !== undefined && ((status.charge ?? 0) > 0 || status.skip);
+}
+
+/** 引擎参数：逐手局沿用原来的三个开关，新切磋再带上 sparMode */
+function fightOptionsOf(options: LiveVersusOptions): FightOptions {
+  return {
+    ...(options.farewell !== undefined ? { farewell: options.farewell } : {}),
+    ...(options.damageScale !== undefined ? { damageScale: options.damageScale } : {}),
+    ...(options.maxHitShare !== undefined ? { maxHitShare: options.maxHitShare } : {}),
+    ...(options.sparMode !== undefined ? { sparMode: options.sparMode } : {}),
+  };
+}
+
+/** 把本地这一手的台词挂到它自己的 `decide` 事件上（同步轮里对手可能先结算） */
+function setDecideLine(
+  decideLines: Map<number, string>,
+  events: BattleEvent[],
+  from: number,
+  side: 0 | 1,
+  line: string | undefined,
+): void {
+  if (!line) return;
+  for (let i = from; i < events.length; i++) {
+    const event = events[i]!;
+    if (event.kind === 'decide' && event.actor === side) {
+      decideLines.set(i, line);
+      return;
+    }
+  }
+}
+
+/**
+ * 独立切磋（rounds）的默认自动策略：确定性、只看公开状态、每场主动技预算 3。
+ * 只给同步轮当后备与「自动」模式用；PvE 的 `autoController` 不动。
+ *
+ * 和旧 autoController 的差别：旧策略按单边出手顺序写，「对方四成血就无头收头」在同步轮里既可能
+ * 撞上假死 / 反伤，也不看瞬影和领域；这里先按状态做防守，再在预算内挑主动技，最后才挑法宝。
+ */
+export function roundsAutoAction(view: BattleView, seed: string, index: number): Action {
+  const rng = rngFrom(`${seed}:rounds-auto:${index}`);
+  const legal = legalActions(view);
+  const has = (action: Action): boolean => legal.some((item) => sameAction(item, action));
+  const skill = (id: SkillId): Action => ({ kind: 'skill', skill: id });
+  const pickFirst = (candidates: Action[]): Action | null => {
+    for (const candidate of candidates) if (has(candidate)) return candidate;
+    return null;
+  };
+  const my = view.you.status;
+  const foe = view.foe.status;
+  const myHp = view.hp[view.self];
+  const myMax = view.maxHp[view.self];
+  const foeHp = view.hp[view.self === 0 ? 1 : 0];
+  const foeMax = view.maxHp[view.self === 0 ? 1 : 0];
+  const budget = view.you.skillUsesLeft ?? 0;
+  const canSkill = budget > 0;
+  const skills = (id: SkillId): Action | null => {
+    const action = skill(id);
+    return canSkill && has(action) ? action : null;
+  };
+  const pickSkill = (ids: SkillId[]): Action | null => pickFirst(ids.map(skill));
+  // 引擎已经按状态定好的一手：受控跳过 / 聚气自动释放 / 假死，别再浪费主动技
+  if (roundsPlaceholder(view)) return pickFirst([{ kind: 'unarmed' }]) ?? legal[0] ?? { kind: 'unarmed' };
+
+  const foeSkills = new Set(view.foe.skills);
+  const foeReversal = foe?.reversal ?? 0;
+  const foeBubbles = foe?.bubbles ?? view.foe.bubbles ?? 0;
+  const foeMirror = foe?.mirror ?? view.foe.mirror ?? 0;
+  const foeBlink = foe?.blink ?? false;
+  const foeField = foe?.field ?? 0;
+  const foeControlled = foe?.controlled ?? false;
+  const foePlayDead = foeSkills.has('play-dead');
+  const foeGhostEye = foeSkills.has('ghost-eye');
+  const foePassives = view.foe.skills.filter((id) => SKILLS[id].kind === '被动').length;
+
+  // 防守：残血先回一口；对方领域 / 暗流压着时先保命或抢在挨打前铺防
+  if (myHp * 100 < myMax * 55 && canSkill) {
+    const heal = pickSkill(['bloom', 'whale-gulp', 'eat-hardship']);
+    if (heal) return heal;
+    if (myHp * 100 < myMax * 35) {
+      const guard = pickSkill(['shadow-step', 'reverse-seal', 'myriad-self', 'abyss-field']);
+      if (guard && !(guard.kind === 'skill' && guard.skill === 'myriad-self' && foeGhostEye)) return guard;
+    }
+  }
+  // 反伤：先用空手 / 弱招把护身印蹭掉，别把大招喂回去
+  if (foeReversal > 0) {
+    if (foeBubbles + foeMirror > 0) {
+      const eat = skills('eat-hardship');
+      if (eat) return eat;
+    }
+    const cheap = pickSkill(['tide-cannon', 'shadow-step', 'abyss-field']);
+    if (cheap) return cheap;
+    return pickFirst([{ kind: 'unarmed' }]) ?? legal[0] ?? { kind: 'unarmed' };
+  }
+  // 瞬影：普通攻击全闪，能用主动技就用（技能不判闪避）
+  if (foeBlink) {
+    const hit = pickSkill(['blue-whale', 'finger-sword', 'headless-shadow', 'ghost-blood', 'ghost-hand', 'lion-roar']);
+    if (hit) return hit;
+  }
+  // 对方铺了领域：每次出手前先吃暗流，尽快在预算内用爆发或控制
+  if (foeField > 0) {
+    const burst = pickSkill([
+      'blue-whale',
+      'ghost-blood',
+      'headless-shadow',
+      'finger-sword',
+      'lion-roar',
+      'whale-song',
+    ]);
+    if (burst) return burst;
+  }
+  // 鬼眼看穿魂影：别在它面前铺万我
+  if (!foeGhostEye) {
+    const mirror = pickSkill(['myriad-self']);
+    if (mirror && myHp * 100 > myMax * 45) return mirror;
+  }
+  // 吃苦吃亏：对方有泡泡 / 魂影时先吃掉（同时回血）
+  if (foeBubbles + foeMirror > 0) {
+    const eat = skills('eat-hardship');
+    if (eat) return eat;
+  }
+  // 无头鬼影只收真正的残血；对方带假死遁时放宽到四成，但仍然不是「四成就无脑收头」
+  if (canSkill && foeHp * 100 <= foeMax * (foePlayDead ? 40 : 28)) {
+    const finish = skills('headless-shadow');
+    if (finish) return finish;
+  }
+  // 鬼血 / 鬼画按被动数量，鬼敲门只在对方还满着时挂
+  if (foePassives >= 4) {
+    const blood = skills('ghost-blood');
+    if (blood) return blood;
+  }
+  if (foePassives >= 3) {
+    const paint = skills('ghost-painting');
+    if (paint) return paint;
+  }
+  if (foeHp * 100 > foeMax * 70) {
+    const knock = skills('ghost-knock');
+    if (knock && !foe?.knock) return knock;
+  }
+  // 万我大手印：对方法宝多时先封法宝（已经封着就别重复）
+  if (view.foe.weapons.length > 2 && foe?.sealed !== 'weapon') {
+    const palm = skills('myriad-palm');
+    if (palm) return palm;
+  }
+  // 领域 / 聚气 / 瞬影：没触发条件不白放；领域铺开对闪避 / 魂影局最值
+  if (canSkill) {
+    const field = skills('abyss-field');
+    if (field) return field;
+  }
+  if (foeHp * 100 > foeMax * 60) {
+    const charge = skills('tide-cannon');
+    if (charge) return charge;
+  }
+  // 控制只压还没被控过的一拍（引擎口径：刚被控过的不再吃控）
+  if (!foeControlled) {
+    const control = pickSkill(['lion-roar', 'whale-song', 'dream-chant', 'farewell-wind']);
+    if (control) return control;
+  }
+  // 伤害招式：五指拳心剑破泡泡，鲸吞带回血，降龙有后劲
+  if (foeBubbles > 0) {
+    const pierce = pickSkill(['finger-sword']);
+    if (pierce) return pierce;
+  }
+  const damage = pickSkill(['blue-whale', 'whale-gulp', 'ghost-blood', 'dragon-palm']);
+  if (damage) return damage;
+  // 预算没用完也不硬花：普通攻击里挑期望伤害最高的一件，带状态时优先多段 / 必中
+  const weapons = legal.filter((action): action is Extract<Action, { kind: 'weapon' }> => action.kind === 'weapon');
+  if (weapons.length > 0) {
+    const score = (action: Extract<Action, { kind: 'weapon' }>): number => {
+      const weapon = WEAPONS[action.weapon];
+      let value = ((weapon.min + weapon.max) / 2) * weapon.hits;
+      if (weapon.mustHit) value += 1.5;
+      if (my?.blind && my.blind > 0) value -= weapon.hits > 1 ? 0 : 0.5;
+      return value;
+    };
+    let best = weapons[0]!;
+    for (const weapon of weapons) if (score(weapon) > score(best)) best = weapon;
+    // 同分时用确定性的随机数打散，避免每场都从同一件起手
+    const top = weapons.filter((weapon) => score(weapon) === score(best));
+    return top[Math.floor(rng() * top.length)] ?? best;
+  }
+  return pickFirst([{ kind: 'unarmed' }]) ?? legal[0] ?? { kind: 'unarmed' };
+}
+
 /** 一次入站请求（服务端）：序号、对面的出手（轮到它时才有）、是否认输、应答 */
 interface LiveInbound {
   index: number;
@@ -620,6 +855,7 @@ interface LiveInbound {
  * 对面 35 秒没回、连接断了、回的招不合法，都按掉线，`done` 回 null。
  */
 export function startLiveClient(options: LiveClientOptions): LiveVersus {
+  if (options.sparMode === 'rounds') return startRoundsClient(options);
   const actions: [Action[], Action[]] = [[], []];
   const decideLines = new Map<number, string>();
   const live = new LiveTimeline(
@@ -639,9 +875,10 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
   let forfeited = false;
   let forfeitSent = false;
   let forfeitConfirmed = false;
-  let confirmForfeit: (() => void) | null = null;
+  // 用对象存 resolver：TS 的跨闭包 CFA 会把裸 let 变量在 await 后窄成 never
+  const forfeitConfirm: { resolve: (() => void) | null } = { resolve: null };
   const forfeitConfirmedWait = new Promise<void>((resolve) => {
-    confirmForfeit = resolve;
+    forfeitConfirm.resolve = resolve;
   });
   let forfeitKicks: (() => void)[] = [];
   const kickForfeit = (): void => {
@@ -656,9 +893,14 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
   const finish = (events: BattleEvent[] | null): void => {
     if (settled) return;
     settled = true;
+    if (events === null) {
+      decideAbort.abort();
+      networkAbort.abort();
+      current?.dispose();
+    }
     current = null;
-    confirmForfeit?.();
-    confirmForfeit = null;
+    forfeitConfirm.resolve?.();
+    forfeitConfirm.resolve = null;
     resolveDone(events);
   };
 
@@ -879,8 +1121,8 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
           if (settled) return;
           if (reply.ok && reply.forfeit) {
             forfeitConfirmed = true;
-            confirmForfeit?.();
-            confirmForfeit = null;
+            forfeitConfirm.resolve?.();
+            forfeitConfirm.resolve = null;
             return;
           }
           options.log(`逐手对传：认输没确认（${reply.ok ? '对面没有回认输' : reply.reason}），按掉线`);
@@ -889,8 +1131,8 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
         (error: unknown) => {
           if (settled) return;
           options.log(`逐手对传：认输没送到（${error instanceof Error ? error.message : String(error)}），按掉线`);
-          confirmForfeit?.();
-          confirmForfeit = null;
+          forfeitConfirm.resolve?.();
+          forfeitConfirm.resolve = null;
           finish(null);
         },
       );
@@ -915,6 +1157,7 @@ export function startLiveClient(options: LiveClientOptions): LiveVersus {
  * 对面 35 秒没来下一手、序号对不上、出手不合法，都按掉线，`done` 回 null。
  */
 export function startLiveServer(options: LiveServerOptions): LiveVersus {
+  if (options.sparMode === 'rounds') return startRoundsServer(options);
   const actions: [Action[], Action[]] = [[], []];
   const decideLines = new Map<number, string>();
   const live = new LiveTimeline(
@@ -1205,6 +1448,393 @@ export function startLiveServer(options: LiveServerOptions): LiveVersus {
         inbound.push({ index, action, ...(forfeit === true ? { forfeit: true as const } : {}), reply: resolve });
         wake?.();
         if (forfeit === true) kickForfeit();
+      });
+    },
+  };
+}
+
+async function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  let cancel: () => void = () => undefined;
+  const stop = new Promise<undefined>((resolve) => {
+    cancel = () => resolve(undefined);
+    if (signal.aborted) cancel();
+    else signal.addEventListener('abort', cancel, { once: true });
+  });
+  try {
+    return await Promise.race([stop, work]);
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
+function roundPlayback(options: LiveVersusOptions) {
+  const decideLines = new Map<number, string>();
+  const live = new LiveTimeline(
+    [options.a.name, options.b.name],
+    options.lineRng,
+    [options.a.skills, options.b.skills],
+    {
+      ...options.timeline,
+      decideLines,
+    },
+  );
+  const interrupted = new AbortController();
+  let ready = options.ready === undefined;
+  const readiness = options.ready?.then(
+    () => {
+      ready = true;
+    },
+    (error: unknown) => {
+      ready = true;
+      if (!interrupted.signal.aborted) options.log(`切磋：开演准备失败（${String(error)}），不等准备继续演`);
+    },
+  );
+  let fast = false;
+  let stopped = false;
+  let current: { show: BattleShow; closing: boolean } | null = null;
+  const showFor = (steps: Step[]): BattleShow => {
+    const local = options.local === 1 ? swapSides(steps) : steps;
+    const start = local[0].at;
+    return new BattleShow(
+      local.map((step) => ({ ...step, at: step.at - start })),
+      options.show,
+    );
+  };
+  return {
+    decideLines,
+    async play(events: BattleEvent[]): Promise<void> {
+      const steps = live.push(events);
+      if (stopped || steps.length === 0) return;
+      if (!fast && !ready && readiness) await untilAborted(readiness, interrupted.signal);
+      if (stopped) return;
+      const closing = steps.some((step) => step.closing);
+      if (fast) {
+        if (ready && closing) showFor(steps).skip();
+        return;
+      }
+      const show = showFor(steps);
+      current = { show, closing };
+      await show.run();
+      if (current?.show === show) current = null;
+    },
+    skip() {
+      fast = true;
+      interrupted.abort();
+      if (current?.closing) current.show.skip();
+      else current?.show.dispose();
+    },
+    stop() {
+      stopped = true;
+      interrupted.abort();
+      current?.show.dispose();
+    },
+  };
+}
+
+async function decideRound(
+  options: LiveVersusOptions,
+  view: BattleView,
+  index: number,
+  signal: AbortSignal,
+): Promise<TurnDecision> {
+  if (roundsPlaceholder(view)) return { action: { kind: 'unarmed' } };
+  if (!signal.aborted) {
+    try {
+      const decision = await untilAborted(options.decide(view, index, signal), signal);
+      if (!signal.aborted && decision && isLegal(view, decision.action)) return decision;
+    } catch (error) {
+      if (!signal.aborted)
+        options.log(`切磋：定这一手失败（${error instanceof Error ? error.message : String(error)}），按后备挑法`);
+    }
+  }
+  return { action: roundsAutoAction(view, options.seed, index) };
+}
+
+async function roundDeadline<T>(work: Promise<T>, waitMs: number, signal: AbortSignal): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), Math.max(1, waitMs));
+  });
+  try {
+    return await untilAborted(Promise.race([work, deadline]), signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 同步轮发起方：只按本轮开场视野锁招，对面也锁好以后才能收到它的动作。 */
+function startRoundsClient(options: LiveClientOptions): LiveVersus {
+  const actions: [Action[], Action[]] = [[], []];
+  const playback = roundPlayback(options);
+  const decideAbort = new AbortController();
+  const networkAbort = new AbortController();
+  const surrenderConfirmed = new AbortController();
+  const opponent = (options.local ^ 1) as 0 | 1;
+  const surrender: { reply?: Promise<SparTurnReply | undefined> } = {};
+  let latestEvents: BattleEvent[] = [];
+  let settled = false;
+  let resolveDone: (events: BattleEvent[] | null) => void = () => undefined;
+  const done = new Promise<BattleEvent[] | null>((resolve) => (resolveDone = resolve));
+
+  const finish = (events: BattleEvent[] | null): void => {
+    if (settled) return;
+    settled = true;
+    decideAbort.abort();
+    networkAbort.abort();
+    playback.stop();
+    resolveDone(events);
+  };
+
+  const exchange = async (body: Parameters<LiveClientOptions['sendTurn']>[0]): Promise<SparTurnReply | undefined> => {
+    const controller = new AbortController();
+    const signals = [networkAbort.signal, controller.signal];
+    if (!body.forfeit) signals.push(surrenderConfirmed.signal);
+    const signal = AbortSignal.any(signals);
+    try {
+      return await roundDeadline(options.sendTurn(body, signal), options.waitMs, signal);
+    } catch (error) {
+      if (!signal.aborted) options.log(`切磋：请求没送到（${error instanceof Error ? error.message : String(error)}）`);
+    } finally {
+      controller.abort();
+    }
+  };
+
+  void (async () => {
+    try {
+      const compute = () => fightUntilDecision(options.a, options.b, options.seed, actions, fightOptionsOf(options));
+      let result = compute();
+      const addRound = (picked: TurnDecision, peer: Action | undefined): boolean => {
+        const view = result.need?.views?.[opponent];
+        if (!peer || !view || !isLegal(view, peer)) return false;
+        const before = result.events.length;
+        actions[options.local].push(picked.action);
+        actions[opponent].push(peer);
+        result = compute();
+        setDecideLine(playback.decideLines, result.events, before, options.local, picked.line);
+        return true;
+      };
+      const conclude = async (reply: SparForfeitReply, pending?: TurnDecision): Promise<void> => {
+        const round = actions[0].length;
+        // 认输应答先到时，用回执补齐双方已经锁定的上一轮。
+        if (reply.round !== round && (reply.round !== round + 1 || !pending || !addRound(pending, reply.action))) {
+          throw new Error('认输回执的轮号或动作不对');
+        }
+        const events = forfeitEvents(result.events, reply.loser);
+        decideAbort.abort();
+        playback.skip();
+        await playback.play(events);
+        finish(events);
+      };
+      let pending: TurnDecision | undefined;
+      while (!settled) {
+        latestEvents = result.events;
+        if (!result.need) {
+          await playback.play(result.events);
+          return finish(result.events);
+        }
+        if (surrender.reply) {
+          const reply = await surrender.reply;
+          if (settled) return;
+          if (reply?.ok && reply.forfeit && reply.round !== undefined) return await conclude(reply, pending);
+          // 最后一轮比认输先锁完：应战方重发该轮动作，仍按引擎的自然结局收场。
+          if (reply?.ok && !reply.forfeit && pending && addRound(pending, reply.action) && !result.need) continue;
+          options.log('切磋：认输没确认，按掉线');
+          return finish(null);
+        }
+        const views = result.need.views;
+        if (!views) throw new Error('缺少本轮的双侧视野');
+        const round = actions[0].length;
+        let decided = false;
+        const choosing = decideRound(options, views[options.local], round, decideAbort.signal).then((picked) => {
+          decided = true;
+          return picked;
+        });
+        await playback.play(result.events);
+        if (settled) return;
+        if (!decided && !decideAbort.signal.aborted) options.think();
+        const picked = await choosing;
+        if (settled) return;
+        if (surrender.reply) continue;
+
+        pending = picked;
+        const reply = await exchange({ index: round, action: picked.action });
+        if (settled) return;
+        if (reply?.ok && reply.forfeit && reply.round !== undefined) return await conclude(reply, picked);
+        if (!reply?.ok || reply.forfeit || !addRound(picked, reply.action)) {
+          if (surrender.reply) continue;
+          options.log(`切磋：没收到对方合法的出手（${reply && !reply.ok ? reply.reason : '超时或动作不符'}），按掉线`);
+          return finish(null);
+        }
+        pending = undefined;
+      }
+    } catch (error) {
+      options.log(`切磋：这一场中断了（${error instanceof Error ? error.message : String(error)}）`);
+      finish(null);
+    }
+  })();
+
+  return {
+    done,
+    skip() {
+      if (settled) return;
+      decideAbort.abort();
+      playback.skip();
+    },
+    forfeit() {
+      if (settled || surrender.reply || latestEvents[latestEvents.length - 1]?.kind === 'end') return;
+      surrender.reply = exchange({ index: actions[0].length, forfeit: true }).then((reply) => {
+        if (reply?.ok && (reply.forfeit ? reply.round !== undefined : reply.action !== undefined)) {
+          surrenderConfirmed.abort();
+        }
+        return reply;
+      });
+      decideAbort.abort();
+      playback.skip();
+    },
+    dispose: () => finish(null),
+    turn: () => Promise.resolve({ ok: false, reason: 'not-visiting' }),
+  };
+}
+
+/** 同步轮应战方：先按开场视野开始选招；两边都锁定后才回复对方。 */
+function startRoundsServer(options: LiveServerOptions): LiveVersus {
+  const actions: [Action[], Action[]] = [[], []];
+  const playback = roundPlayback(options);
+  const decideAbort = new AbortController();
+  const stop = new AbortController();
+  const opponent = (options.local ^ 1) as 0 | 1;
+  type Request = { action: Action; reply: (reply: LiveTurnReply) => void };
+  const inbox: { request?: Request; wake?: (request: Request | undefined) => void } = {};
+  const compute = () => fightUntilDecision(options.a, options.b, options.seed, actions, fightOptionsOf(options));
+  let result = compute();
+  let settled = false;
+  let receipt: SparEndReceipt | undefined;
+  let resolveDone: (events: BattleEvent[] | null) => void = () => undefined;
+  const done = new Promise<BattleEvent[] | null>((resolve) => (resolveDone = resolve));
+
+  const finish = (events: BattleEvent[] | null): void => {
+    if (settled) return;
+    settled = true;
+    decideAbort.abort();
+    stop.abort();
+    playback.stop();
+    inbox.request?.reply({ ok: false, reason: 'not-visiting' });
+    inbox.wake?.(undefined);
+    inbox.request = undefined;
+    inbox.wake = undefined;
+    resolveDone(events);
+  };
+
+  const fail = (error: unknown): void => {
+    if (settled || receipt?.forfeit) return;
+    options.log(`切磋：这一场中断了（${error instanceof Error ? error.message : String(error)}）`);
+    finish(receipt ? result.events : null);
+  };
+
+  const recordEnd = (end: SparEndReceipt): void => {
+    receipt = end;
+    options.onEnd?.(end);
+  };
+
+  const concede = (loser: 0 | 1): LiveTurnReply => {
+    if (receipt?.forfeit) return receipt;
+    if (settled || !result.need) return { ok: false, reason: 'late' };
+    const round = actions[0].length;
+    const action = actions[options.local][round - 1];
+    const end: SparForfeitReply = { ok: true, forfeit: true, loser, round, ...(action ? { action } : {}) };
+    recordEnd(end);
+    inbox.request?.reply(end);
+    inbox.request = undefined;
+    decideAbort.abort();
+    stop.abort();
+    const events = forfeitEvents(result.events, loser);
+    playback.skip();
+    void playback.play(events).then(
+      () => finish(events),
+      () => finish(events),
+    );
+    return end;
+  };
+
+  void (async () => {
+    try {
+      while (!settled && !receipt?.forfeit) {
+        if (!result.need) {
+          await playback.play(result.events);
+          return finish(result.events);
+        }
+        const views = result.need.views;
+        if (!views) throw new Error('缺少本轮的双侧视野');
+        const round = actions[0].length;
+        let decided = false;
+        const choosing = decideRound(options, views[options.local], round, decideAbort.signal).then((picked) => {
+          decided = true;
+          return picked;
+        });
+        const playing = playback
+          .play(result.events)
+          .then(() => {
+            if (!settled && !receipt && !decided && !decideAbort.signal.aborted) options.think();
+          })
+          .catch(fail);
+        const request =
+          inbox.request ??
+          new Promise<Request | undefined>((resolve) => {
+            inbox.wake = resolve;
+          });
+        const locked = await roundDeadline(Promise.all([request, choosing]), options.waitMs, stop.signal);
+        inbox.wake = undefined;
+        if (settled || receipt) return;
+        if (!locked?.[0]) {
+          options.log('切磋：等待双方锁招超时，按掉线');
+          return finish(null);
+        }
+        const [move, picked] = locked;
+        const before = result.events.length;
+        actions[options.local].push(picked.action);
+        actions[opponent].push(move.action);
+        result = compute();
+        setDecideLine(playback.decideLines, result.events, before, options.local, picked.line);
+        if (!result.need) recordEnd({ ok: true, round: round + 1, action: picked.action });
+        inbox.request = undefined;
+        move.reply({ ok: true, action: picked.action });
+        await playing;
+      }
+    } catch (error) {
+      fail(error);
+    }
+  })();
+
+  return {
+    done,
+    skip() {
+      if (settled) return;
+      decideAbort.abort();
+      playback.skip();
+    },
+    forfeit: () => {
+      concede(options.local);
+    },
+    dispose: () => finish(null),
+    async turn(index, action, forfeit) {
+      if (receipt) return sparEndTurnReply(receipt, index);
+      if (settled) return { ok: false, reason: 'not-visiting' };
+      const round = actions[0].length;
+      if (forfeit && (index === round || index === round - 1)) return concede(opponent);
+      if (!forfeit && index < round) {
+        const peer = actions[opponent][index];
+        if (peer && action && sameAction(peer, action)) return { ok: true, action: actions[options.local][index] };
+      }
+      if (index !== round) return { ok: false, reason: 'late' };
+      const view = result.need?.views?.[opponent];
+      if (!view || inbox.request) return { ok: false, reason: 'late' };
+      if (!action || !isLegal(view, action)) {
+        finish(null);
+        return { ok: false, reason: 'illegal' };
+      }
+      return new Promise<LiveTurnReply>((reply) => {
+        inbox.request = { action, reply };
+        inbox.wake?.(inbox.request);
       });
     },
   };

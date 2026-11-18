@@ -2381,8 +2381,8 @@ function findDodgedCast(opts: {
   return null;
 }
 
-test('X26：切磋规则变了，引擎版本 8 → 9；end.reason 认 forfeit', () => {
-  assert.equal(BATTLE_VERSION, 9);
+test('独立切磋调整必中法宝后使用引擎版本 11；end.reason 仍认 forfeit', () => {
+  assert.equal(BATTLE_VERSION, 11);
   const end: BattleEvent = { actor: 0, kind: 'end', winner: 0, reason: 'forfeit', hp: [1, 0] };
   assert.equal(end.kind === 'end' && end.reason, 'forfeit');
 });

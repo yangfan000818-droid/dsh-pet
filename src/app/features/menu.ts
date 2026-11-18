@@ -1,4 +1,4 @@
-import { MENU_CULTIVATION_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
+import { MENU_SPAR_GROUP, MENU_VISIT_GROUP, lazyFns } from './context';
 import type { FeatureContext } from './context';
 import { moveActions, pickMoveAction } from './moves';
 import { delay, errorText } from './util';
@@ -23,6 +23,7 @@ export interface Menu {
 
 export function createMenu(ctx: FeatureContext): Menu {
   const {
+    battleActions,
     bondMenuLabel,
     brawlActions,
     brawlLiveActions,
@@ -42,7 +43,8 @@ export function createMenu(ctx: FeatureContext): Menu {
   /**
    * 要注册的菜单项。宿主每个 owner 最多 24 项（`>` 就整份拒了，菜单从此不再更新），
    * 所以这里按优先级兜底截断：固定的四项（看屏幕、日记、动一动、羁绊）+ 修炼（最多 4：信息、渡劫、服丹后渡劫、领悟×2 中的一种组合）
-   * 在前，串门项在后——挤不下时先少列几个邻居 / 少几样一起玩和零食，「送客」「切磋」「心魔试炼」「渡劫」这些都要留。
+   * + 战斗中的快进 / 认输在前，串门与切磋项在后——挤不下时先少列几个邻居 / 少几样一起玩和零食，
+   * 「送客」「切磋」「心魔试炼」「渡劫」这些都要留。
    */
   function wantedLabels(): string[] {
     const labels = [
@@ -53,6 +55,8 @@ export function createMenu(ctx: FeatureContext): Menu {
       // （菜单顺序测试也按这个口径）
       bondMenuLabel(),
       ...cultivationActions().keys(),
+      // 快进 / 认输（X17 / X26）：和修炼解绑，关着修炼的切磋也要有；排在邻居 / 挑战项前，避免被截断
+      ...battleActions().keys(),
       // 群架（X27）还在本地演示阶段：先排在串门项前面，方便真机看 3/4/5 人的围圈；
       // B4 接上联机、定下入口位置后再挪到切磋那一档
       ...brawlActions().keys(),
@@ -113,6 +117,7 @@ export function createMenu(ctx: FeatureContext): Menu {
     } else {
       const action =
         cultivationActions().get(label) ??
+        battleActions().get(label) ??
         brawlLiveActions().get(label) ??
         brawlActions().get(label) ??
         visitActions().get(label) ??
@@ -120,7 +125,7 @@ export function createMenu(ctx: FeatureContext): Menu {
       if (action) await action();
       // 菜单弹出后邻居走了
       else if (label.startsWith(`${MENU_VISIT_GROUP}/去 `)) await say('它好像已经不在附近了～');
-      else if (label.startsWith(`${MENU_CULTIVATION_GROUP}/切磋/`)) await say('它好像已经不在附近了～');
+      else if (label.startsWith(`${MENU_SPAR_GROUP}/`)) await say('它好像已经不在附近了～');
     }
     await refreshStatus(now);
     await refreshMenu();

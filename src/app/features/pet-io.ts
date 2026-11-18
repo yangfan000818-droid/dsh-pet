@@ -13,11 +13,12 @@ export interface PetIo {
   petId(): string;
   petRequest(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
   holdPet(steps: Step[], durationMs?: number): Promise<void>;
-  releasePet(afterMs: number): void;
+  releasePet(afterMs: number, held?: Promise<void>): void;
 }
 
 export function createPetIo(ctx: FeatureContext): PetIo {
   const { deps, log } = ctx;
+  let latestHold: Promise<void> | undefined;
   /** 当前目标宠物：main（没有就取第一只）；配置读不到时按 main */
   function petId(): string {
     try {
@@ -64,11 +65,18 @@ export function createPetIo(ctx: FeatureContext): PetIo {
    * 上一场刚演完、锁还没放：续上同一把（续不上就重新拿）。拿不到只记一行，照没锁的老样子演。
    * @param durationMs 逐手出招（X17）事先不知道一场多久：给一个够用的时长，别让手还没出完锁就到期
    */
-  async function holdPet(steps: Step[], durationMs?: number): Promise<void> {
+  function holdPet(steps: Step[], durationMs?: number): Promise<void> {
     if (ctx.state.showLockRelease !== null) clearTimeout(ctx.state.showLockRelease);
     ctx.state.showLockRelease = null;
     const showMs = durationMs ?? (steps.length ? steps[steps.length - 1].at + LINE_MS : 0);
     const ttl = Math.min(LOCK_MAX_TTL_MS, showMs + SHOW_LOCK_SPARE_MS);
+    // 上一场可能快进到收场了，但它的锁还在路上；等到手后再续，避免发出两次新建请求。
+    const held = latestHold ? latestHold.then(() => acquire(ttl)) : acquire(ttl);
+    latestHold = held;
+    return held;
+  }
+
+  async function acquire(ttl: number): Promise<void> {
     let failure = '';
     for (const lockId of ctx.state.showLock === null ? [null] : [ctx.state.showLock, null]) {
       try {
@@ -86,20 +94,27 @@ export function createPetIo(ctx: FeatureContext): PetIo {
     log(`演出占不住宠物：${failure}`);
   }
 
-  /** 演完放开宠物（等收场的动作播完、在最后一帧停一会儿；退出时立刻放） */
-  function releasePet(afterMs: number): void {
-    if (ctx.state.showLockRelease !== null) clearTimeout(ctx.state.showLockRelease);
-    ctx.state.showLockRelease = setTimeout(() => {
-      ctx.state.showLockRelease = null;
-      const lockId = ctx.state.showLock;
-      if (lockId === null) return;
-      ctx.state.showLock = null;
-      petFetch('POST', '/lock/release', { lockId }, null)
-        .then((result) => {
-          if (result.ok !== true) log(`演出放开宠物失败：${JSON.stringify(result)}`);
-        })
-        .catch((error: unknown) => log(`演出放开宠物失败：${errorText(error)}`));
-    }, afterMs);
+  /** 快进时锁可能仍在路上；它到手后再释放，已被下一场接管则不动。 */
+  function releasePet(afterMs: number, held?: Promise<void>): void {
+    const owner = held ?? latestHold;
+    const release = (): void => {
+      if (latestHold !== owner) return;
+      if (ctx.state.showLockRelease !== null) clearTimeout(ctx.state.showLockRelease);
+      ctx.state.showLockRelease = setTimeout(() => {
+        ctx.state.showLockRelease = null;
+        if (latestHold !== owner) return;
+        const lockId = ctx.state.showLock;
+        if (lockId === null) return;
+        ctx.state.showLock = null;
+        petFetch('POST', '/lock/release', { lockId }, null)
+          .then((result) => {
+            if (result.ok !== true) log(`演出放开宠物失败：${JSON.stringify(result)}`);
+          })
+          .catch((error: unknown) => log(`演出放开宠物失败：${errorText(error)}`));
+      }, afterMs);
+    };
+    if (held) void held.then(release, release);
+    else release();
   }
   return { petId, petRequest, holdPet, releasePet };
 }

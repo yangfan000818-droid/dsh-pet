@@ -250,7 +250,7 @@ export const MOVE_IDS = Object.keys(MOVES) as MoveId[];
  * 引擎版本（X5 名帖的 v）：结算规则、图鉴内容变了就 +1。切磋双方在名帖里各带一份，
  * 两边不同就切不了（谁也不知道对方那版引擎会打出什么）。
  */
-export const BATTLE_VERSION = 9;
+export const BATTLE_VERSION = 11;
 
 /**
  * 切磋节奏（X23）：切磋 / 隔空只结算 65% 伤害，把「两三手互秒」拉成有来有回的长局。
@@ -359,6 +359,8 @@ export type Action =
 export interface BattleView {
   /** 自己是 0 还是 1 */
   self: 0 | 1;
+  /** 独立切磋：同一轮的双方在结算前锁定动作。 */
+  round?: number;
   hp: [number, number];
   maxHp: [number, number];
   you: {
@@ -373,9 +375,36 @@ export interface BattleView {
     moveUses?: MoveId[];
     /** 切磋（X26）：本场还剩几次主动技额度；只在切磋局填，其他模式不出现 */
     skillUsesLeft?: number;
+    /** 独立切磋的公开状态；旧模式不填。 */
+    status?: BattleStatus;
   };
   /** `bubbles` / `mirror`（X21）：对方还剩几层泡泡护体、几重魂影，吃苦吃亏拿这个挑吃法 */
-  foe: { weapons: WeaponId[]; skills: SkillId[]; moves?: MoveId[]; bubbles?: number; mirror?: number };
+  foe: {
+    weapons: WeaponId[];
+    skills: SkillId[];
+    moves?: MoveId[];
+    bubbles?: number;
+    mirror?: number;
+    status?: BattleStatus;
+  };
+}
+
+export interface BattleStatus {
+  blind: number;
+  skip: boolean;
+  mirror: number;
+  bubbles: number;
+  reversal: number;
+  field: number;
+  blink: boolean;
+  charge: number;
+  controlled: boolean;
+  sealed: 'weapon' | 'skill' | null;
+  sealedPassive: SkillId | null;
+  knock: boolean;
+  ancient: boolean;
+  surge: boolean;
+  used: SkillId[];
 }
 
 export interface Controller {
@@ -392,6 +421,8 @@ export type ActionSource = 'auto' | readonly Action[];
 export interface DecisionNeed {
   side: 0 | 1;
   view: BattleView;
+  /** 同步轮中双方尚未结算的视野；外层可并行收集双方动作。 */
+  views?: [BattleView, BattleView];
 }
 
 export interface FightUntilDecisionResult {
@@ -406,6 +437,9 @@ export type SkipCause = 'stun' | 'freeze' | 'sleep' | 'dream' | 'float' | 'sham'
 
 export type BattleEvent =
   | { actor: 0 | 1; kind: 'start'; hp: [number, number] }
+  /** 同步轮的演出分界：两手各开一段，只有 round-end 更新气血。 */
+  | { actor: 0 | 1; kind: 'round-action'; hp: [number, number] }
+  | { actor: 0 | 1; kind: 'round-end'; hp: [number, number] }
   | {
       actor: 0 | 1;
       kind: 'decide';
@@ -446,7 +480,7 @@ export type BattleEvent =
       surge?: true;
       hp: [number, number];
     }
-  | { actor: 0 | 1; kind: 'dodge'; hp: [number, number] }
+  | { actor: 0 | 1; kind: 'dodge'; beast?: true; hp: [number, number] }
   | { actor: 0 | 1; kind: 'counter'; damage: number; blocked: boolean; hp: [number, number] }
   | { actor: 0 | 1; kind: 'beast'; damage: number; blocked: boolean; hp: [number, number] }
   /** 跳过一次出手；`cause`：陀螺 / 狮子吼是晕（stun），雪球是冻住（freeze），鲸歌是睡着（sleep），魂牵梦绕是入梦（dream） */
@@ -459,7 +493,7 @@ export type BattleEvent =
   | { actor: 0 | 1; kind: 'mirror'; hp: [number, number] }
   /** 别人替挨了这一下（Y0 定仙游结局；actor 是挨打的那一方，by 是替挡者的名字） */
   | { actor: 0 | 1; kind: 'guard'; by: string; hp: [number, number] }
-  | { actor: 0 | 1; kind: 'play-dead'; hp: [number, number] }
+  | { actor: 0 | 1; kind: 'play-dead'; deferred?: true; hp: [number, number] }
   | {
       actor: 0 | 1;
       kind: 'skill';
@@ -504,6 +538,8 @@ export type BattleEvent =
       actor: 0 | 1;
       kind: 'end';
       winner: 0 | 1;
+      /** 独立切磋双亡或到时同血量为平局；winner 此时仅作演出占位。 */
+      draw?: true;
       reason: 'ko' | 'timeout' | 'farewell' | 'forfeit';
       hp: [number, number];
     };
@@ -706,19 +742,24 @@ export function hpPair(a: Side, b: Side): [number, number] {
  * 结算一次伤害：泡泡护体挡一半（向下取整），致命一击被假死遁救下时留 1 点（一场一次）。
  * `pierce`（X9 的五指拳心剑）：穿护体——不消耗泡泡、也不打折。
  * `noPlayDead`（X22 无头鬼影）：这一下打死了就真死了，假死遁也救不回来。
+ * 同步轮用 `deferKo` 保留超出的伤害，等本轮的回血与反击都算完再判致命。
  */
 export function applyDamage(
   target: Side,
   raw: number,
-  opts: { pierce?: boolean; noPlayDead?: boolean } = {},
+  opts: { pierce?: boolean; noPlayDead?: boolean; deferKo?: boolean; charging?: boolean } = {},
 ): { damage: number; blocked: boolean; playDead: boolean } {
   let damage = raw;
   // 鲸派气功蓄力（X25）：先按 CHARGE_GUARD 收一道，泡泡护体照旧在这之后挡
-  if (target.charge > 0) damage = Math.floor(damage * CHARGE_GUARD);
+  if (opts.charging ?? target.charge > 0) damage = Math.floor(damage * CHARGE_GUARD);
   const blocked = !opts.pierce && hasSkill(target, 'bubble') && target.bubbles > 0;
   if (blocked) {
     target.bubbles -= 1;
     damage = Math.floor(damage * BUBBLE_FACTOR);
+  }
+  if (opts.deferKo) {
+    target.hp -= damage;
+    return { damage, blocked, playDead: false };
   }
   const before = target.hp;
   target.hp = Math.max(0, target.hp - damage);
@@ -887,6 +928,9 @@ export const MAX_ACTIONS = 30;
  * AI 和手动点招、X19 收到的对方出手都先过这里；不合法就当没选。
  */
 export function legalActions(view: BattleView): Action[] {
+  // 同步轮受控 / 自动释放仍交换一个占位动作，不消耗玩家的招式。
+  if (view.round !== undefined && (view.you.status?.skip || (view.you.status?.charge ?? 0) > 0))
+    return [{ kind: 'unarmed' }];
   // 封法宝 / 封招式（X21）：这一手不列被封的那一类，只剩空手和另一边
   const actions: Action[] =
     view.you.sealed === 'weapon' ? [] : view.you.weapons.map((weapon): Action => ({ kind: 'weapon', weapon }));
@@ -939,6 +983,8 @@ export const TRIBULATION_LATE_STEP = -0.0112;
 export const TRIBULATION_HP_CUT = 0.368;
 /** 破势：伤害里随防守方气血上限加成的比例 */
 export const HP_BONUS = 0.25;
+/** 一对一同步轮：法宝自带必中的那一段只吃六成破势。临时必中和主动技不打折。 */
+export const ROUND_SURE_WEAPON_HP_SHARE = 0.6;
 export const CRIT_SKILL_CHANCE = 0.18;
 /** 狮子吼伤害里吃的破势份额（蓝鲸吃整份） */
 export const LION_HP_SHARE = 0.6;
@@ -1070,6 +1116,8 @@ export interface FightOptions {
   damageScale?: number;
   /** 单次伤害最多打掉目标最大气血的几成（X23 切磋）；不传不封顶 */
   maxHitShare?: number;
+  /** 独立切磋；未传时保留原有 PvE 和旧切磋结算。 */
+  sparMode?: 'opening' | 'rounds';
 }
 
 export function fight(
@@ -1140,12 +1188,17 @@ export function runFight(
   events: BattleEvent[] = [],
 ): BattleEvent[] {
   // 结算随机数只由种子决定，是这一场内部的局部状态
-  const rng = rngFrom(seed + ':resolve');
+  let rng = rngFrom(seed + ':resolve');
+  const rounds = options?.sparMode === 'rounds';
+  let round = 0;
+  // 同一层泡泡不能同时减免正面攻击与反伤；反伤先记事件，等正面伤害之后再扣血。
+  const reactions: { event: Extract<BattleEvent, { kind: 'reverse' | 'counter' }>; raw: number }[] = [];
+  const acted = new Set<0 | 1>();
   // 切磋节奏（X23）：所有落到气血上的伤害先过这一道；不传时原样返回，PvE 结算不变
   const damageScale = options?.damageScale ?? 1;
   const maxHitShare = options?.maxHitShare;
   // X23 的切磋规则（伤害缩放 / 封顶）只在这类局里生效；PvE 的旧快照和平衡不受影响
-  const sparRules = (options?.damageScale ?? 1) !== 1 || maxHitShare !== undefined;
+  const sparRules = options?.sparMode !== undefined || (options?.damageScale ?? 1) !== 1 || maxHitShare !== undefined;
   const scaleDamage = (raw: number, target: { f: Fighter }): number => {
     if (raw <= 0) return raw;
     const scaled = Math.max(1, Math.floor(raw * damageScale));
@@ -1153,8 +1206,38 @@ export function runFight(
     return Math.min(scaled, Math.max(1, Math.floor(target.f.hp * maxHitShare)));
   };
   // 送走用单独一条种子流（X16）：只在串门切磋里送友风打中时抽，不挪结算序列
-  const farewellRng = options?.farewell ? rngFrom(seed + ':farewell') : null;
-  const sides = [makeSide(a, 0.8 + 0.4 * rng()), makeSide(b, 0.8 + 0.4 * rng())];
+  const farewellRng = options?.farewell && !options.sparMode ? rngFrom(seed + ':farewell') : null;
+  const sides: [Side, Side] = [makeSide(a, 0.8 + 0.4 * rng()), makeSide(b, 0.8 + 0.4 * rng())];
+  const status = (side: Side): BattleStatus => ({
+    blind: side.blind,
+    skip: side.skip,
+    mirror: side.mirror,
+    bubbles: side.bubbles,
+    reversal: side.reversal,
+    field: side.field,
+    blink: side.blink,
+    charge: side.charge,
+    controlled: side.controlled,
+    sealed: side.sealed,
+    sealedPassive: side.sealedPassive,
+    knock: side.knock,
+    ancient: side.ancient,
+    surge: side.surge,
+    used: [...side.used],
+  });
+  const damageTo = (target: Side, raw: number, opts: { pierce?: boolean; noPlayDead?: boolean } = {}) => {
+    if (options?.sparMode === 'opening' && !acted.has(target === sides[0] ? 0 : 1))
+      raw = Math.min(raw, Math.max(0, target.hp - Math.ceil(target.f.hp * 0.5)));
+    return applyDamage(target, raw, rounds ? { ...opts, deferKo: true } : opts);
+  };
+  const recover = (side: Side, amount: number): number => {
+    // 同步轮先在事件里记治疗量；合并本轮伤害后才回到上限。
+    if (rounds) return amount;
+    const heal = Math.min(amount, side.f.hp - side.hp);
+    side.hp += heal;
+    return heal;
+  };
+  const canActOn = (side: Side): boolean => rounds || side.hp > 0;
   events.push({ actor: 0, kind: 'start', hp: [sides[0].hp, sides[1].hp] });
 
   const view = (self: 0 | 1): BattleView => {
@@ -1162,6 +1245,7 @@ export function runFight(
     const foe = sides[self ^ 1];
     return {
       self,
+      ...(rounds ? { round } : {}),
       hp: [sides[0].hp, sides[1].hp],
       maxHp: [sides[0].f.hp, sides[1].f.hp],
       you: {
@@ -1177,12 +1261,14 @@ export function runFight(
           : {}),
         // 切磋（X26）才给额度；其他模式的 view 与以前逐字段一致
         ...(sparRules ? { skillUsesLeft: me.skillUses } : {}),
+        ...(options?.sparMode ? { status: status(me) } : {}),
       },
       foe: {
         weapons: foe.f.weapons,
         skills: foe.f.skills,
         bubbles: foe.bubbles,
         mirror: foe.mirror,
+        ...(options?.sparMode ? { status: status(foe) } : {}),
         ...(foe.f.moves ? { moves: foe.f.moves } : {}),
       },
     };
@@ -1192,11 +1278,13 @@ export function runFight(
   const asleep = (side: Side): boolean =>
     side.skip && (side.skipCause === 'sleep' || side.skipCause === 'dream' || side.skipCause === 'float');
 
+  const canControl = (target: Side): boolean => (rounds ? !target.skip : !target.controlled);
+
   /** 控制判定（X20）：刚被控过、还没出手的不再吃控；否则按基础几率 + 灵力压身法抽一签 */
   const controlLands = (self: 0 | 1, skill: SkillId): boolean => {
     const me = sides[self];
     const foe = sides[self ^ 1];
-    if (foe.controlled) return false;
+    if (!canControl(foe)) return false;
     const chance = Math.min(
       CONTROL_MAX,
       Math.max(CONTROL_MIN, (CONTROL_BASE[skill] ?? 0.5) + (me.f.power - foe.f.agility) * CONTROL_POWER_STEP),
@@ -1207,9 +1295,22 @@ export function runFight(
   /** 控住：对方跳过下一次出手，并记下「还没出手、这期间不再吃控」 */
   const control = (self: 0 | 1, cause: SkipCause): void => {
     const foe = sides[self ^ 1];
+    if (options?.sparMode === 'opening' && !acted.has((self ^ 1) as 0 | 1)) return;
     foe.skip = true;
     foe.skipCause = cause;
     foe.controlled = true;
+  };
+
+  const strikeBack = (actor: 0 | 1, kind: 'reverse' | 'counter', raw: number): void => {
+    const target = sides[actor ^ 1];
+    const applied = rounds ? { damage: 0, blocked: false, playDead: false } : damageTo(target, raw);
+    const event: Extract<BattleEvent, { kind: 'counter' | 'reverse' }> =
+      kind === 'counter'
+        ? { actor, kind, damage: applied.damage, blocked: applied.blocked, hp: hpPair(...sides) }
+        : { actor, kind, damage: applied.damage, hp: hpPair(...sides) };
+    events.push(event);
+    if (rounds) reactions.push({ event, raw });
+    if (applied.playDead) events.push({ actor: (actor ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(...sides) });
   };
 
   /**
@@ -1228,14 +1329,7 @@ export function runFight(
     const foe = sides[self ^ 1];
     if (foe.reversal > 0 && raw > 0) {
       foe.reversal -= 1;
-      const back = applyDamage(me, scaleDamage(Math.floor(raw * REVERSAL_SHARE), me));
-      events.push({
-        actor: (self ^ 1) as 0 | 1,
-        kind: 'reverse',
-        damage: back.damage,
-        hp: hpPair(sides[0], sides[1]),
-      });
-      if (back.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      strikeBack((self ^ 1) as 0 | 1, 'reverse', scaleDamage(Math.floor(raw * REVERSAL_SHARE), me));
       return { damage: 0, blocked: false, playDead: false, reversed: true, mirrored: false };
     }
     // 必中 / 主动招式也能被魂影替（X23）：普通攻击在 attack 里已经先挡过，不会走到这里重复消耗。
@@ -1245,7 +1339,7 @@ export function runFight(
       events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
       return { damage: 0, blocked: false, playDead: false, reversed: false, mirrored: true };
     }
-    const applied = applyDamage(foe, scaleDamage(raw, foe), opts);
+    const applied = damageTo(foe, scaleDamage(raw, foe), opts);
     return { ...applied, reversed: false, mirrored: false };
   };
 
@@ -1261,12 +1355,13 @@ export function runFight(
     const me = sides[self];
     const foe = sides[self ^ 1];
     const spec = action.kind === 'unarmed' ? null : specOf(action, me.f.pack);
-    const comboCap = MAX_COMBOS;
+    // 同步轮的烟花是稳定单发，不再把必中的整份伤害连打几次。
+    const comboCap = rounds && action.kind === 'weapon' && action.weapon === 'firework' ? 0 : MAX_COMBOS;
     let combos = 0;
     const hits = spec ? spec.hits : 1;
     // 降龙十八掌的后劲只跟法宝 / 空手走（X16）；招式表里的招和别的主动招式不消耗它
     const surgeArmed = me.surge && (action.kind === 'weapon' || action.kind === 'unarmed');
-    for (let hit = 0; hit < hits + combos && foe.hp > 0; hit++) {
+    for (let hit = 0; hit < hits + combos && canActOn(foe); hit++) {
       // 后劲只加在这一手的第一下：打空 / 被闪避 / 打分身 / 魂影 / 替挡都算没打中，直接作废
       const surgeHere = surgeArmed && hit === 0;
       if (surgeHere) me.surge = false;
@@ -1287,9 +1382,9 @@ export function runFight(
         events.push({ actor: self, kind: 'miss', hp: hpPair(sides[0], sides[1]) });
         continue;
       }
-      // 必中：烟花；银托盘最后一段从背后回旋磕过来；对方睡着 / 入梦；
-      // 深渊领域（X25）与瞬影（X25）也都是自己出手必中
-      const sure = me.field > 0 || me.blink || spec?.mustHit || (spec?.returnSure && hit === hits - 1) || asleep(foe);
+      // 法宝自带必中（烟花、银托盘回旋）与领域、瞬影、睡眠等临时必中分开算。
+      const nativeSure = spec?.mustHit || (spec?.returnSure && hit === hits - 1);
+      const sure = me.field > 0 || me.blink || nativeSure || asleep(foe);
       if (!sure && dodgeRoll < dodgeRate(foe)) {
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
         continue;
@@ -1323,7 +1418,8 @@ export function runFight(
       if (twin && spec) base += randBetween((dmgRoll * 7.31) % 1, spec.min, spec.max);
       // 灵力和破势（伤害随对手气血上限加成，§平衡：不然境界高一线、血厚一线就接近稳赢）
       // 都是整段出手合计一份，多段法宝每段按段数分摊（否则一次三张/三件会吃成三倍）
-      const perPiece = Math.floor((me.f.power * POWER_FACTOR + foe.f.hp * HP_BONUS) / (spec?.hits ?? 1));
+      const hpShare = rounds && action.kind === 'weapon' && nativeSure ? ROUND_SURE_WEAPON_HP_SHARE : 1;
+      const perPiece = Math.floor((me.f.power * POWER_FACTOR + foe.f.hp * HP_BONUS * hpShare) / (spec?.hits ?? 1));
       let damage = base + perPiece;
       // 会心：人人有个基础会心率，会心一击把它提到 10%（§平衡：加方差，免得境界高一线就稳赢）
       const critChance = hasSkill(me, 'critical') ? CRIT_SKILL_CHANCE : BASE_CRIT;
@@ -1337,7 +1433,7 @@ export function runFight(
       const applied = dealDamage(self, damage);
       const kind = hit < hits ? 'hit' : 'combo';
       // 鸡毛掸子：打中（含被泡泡挡下）就笑岔气，对方下次出手往后推半个间隔；被护身印弹回就不算打中
-      const slowed = !!spec?.slow && foe.hp > 0 && !applied.reversed && !applied.mirrored;
+      const slowed = !rounds && !!spec?.slow && foe.hp > 0 && !applied.reversed && !applied.mirrored;
       if (slowed) foe.next += intervalOf(foe) * SLOW_FACTOR;
       events.push({
         actor: self,
@@ -1359,7 +1455,7 @@ export function runFight(
         spec.skipChance > 0 &&
         !applied.reversed &&
         !applied.mirrored &&
-        !foe.controlled &&
+        canControl(foe) &&
         skipRoll < spec.skipChance
       ) {
         control(self, spec.skipCause);
@@ -1369,24 +1465,16 @@ export function runFight(
         !applied.reversed &&
         !applied.mirrored &&
         !spec?.ranged &&
-        foe.hp > 0 &&
+        canActOn(foe) &&
         hasSkill(foe, 'sixth-sense') &&
         counterRoll < SIXTH_SENSE_CHANCE
       ) {
         const counterDmg = randBetween(rng(), 3, 6) + Math.floor(foe.f.power * POWER_FACTOR);
-        const back = applyDamage(me, scaleDamage(counterDmg, me));
-        events.push({
-          actor: (self ^ 1) as 0 | 1,
-          kind: 'counter',
-          damage: back.damage,
-          blocked: back.blocked,
-          hp: hpPair(sides[0], sides[1]),
-        });
-        if (back.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+        strikeBack((self ^ 1) as 0 | 1, 'counter', scaleDamage(counterDmg, me));
       }
       // 连击：打中后才判，最多 MAX_COMBOS 次
       if (
-        foe.hp > 0 &&
+        canActOn(foe) &&
         combos < comboCap &&
         hit + 1 >= hits &&
         comboRoll <
@@ -1396,12 +1484,12 @@ export function runFight(
       }
     }
     // 灵兽：自己前几次出手后追加一击（可被闪避，不会被反击）；瞬影连灵兽那一口也闪
-    if (me.beastLeft > 0 && foe.hp > 0) {
+    if (me.beastLeft > 0 && canActOn(foe)) {
       me.beastLeft -= 1;
       const dodgeRoll = rng();
       const dmgRoll = rng();
       if (!foe.blink && (asleep(foe) || !(dodgeRoll < dodgeRate(foe)))) {
-        const applied = applyDamage(foe, scaleDamage(randBetween(dmgRoll, 4, 7), foe));
+        const applied = damageTo(foe, scaleDamage(randBetween(dmgRoll, 4, 7), foe));
         events.push({
           actor: self,
           kind: 'beast',
@@ -1412,11 +1500,16 @@ export function runFight(
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       } else {
-        events.push({ actor: (self ^ 1) as 0 | 1, kind: 'dodge', hp: hpPair(sides[0], sides[1]) });
+        events.push({
+          actor: (self ^ 1) as 0 | 1,
+          kind: 'dodge',
+          ...(rounds ? { beast: true } : {}),
+          hp: hpPair(...sides),
+        });
       }
     }
     // 深渊领域（X25）：自己的每一次攻击之后少一层；瞬影这一手打完就散（放非攻击的招不算）
-    if (me.field > 0) me.field -= 1;
+    if (me.field > 0 && !rounds) me.field -= 1;
     if (me.blink) me.blink = false;
   };
 
@@ -1446,39 +1539,61 @@ export function runFight(
   /** 送友风把对方送走了（X16）：这一场到此为止，`end` 已经推进事件里，不再排后面的事件 */
   let farewellEnd = false;
 
-  /** 一次出手（含主动招式），返回实际执行的动作；凭空生花的「马上再出手一次」在里面就地补一次 */
-  const takeAction = (self: 0 | 1): Action => {
+  /** 真正出手前先结算已有领域和鬼敲门；被控跳过时两样都不触发。 */
+  const beforeAction = (self: 0 | 1, inField: boolean): void => {
     const me = sides[self];
-    // 深渊领域（X25）：领域主人铺开以后，对方每一次真正出手之前先吃一口暗流（被控跳过不算）
-    const fieldOwner = sides[self ^ 1];
-    if (fieldOwner.field > 0) {
-      const applied = applyDamage(me, scaleDamage(FIELD_TICK, me));
-      events.push({
-        actor: (self ^ 1) as 0 | 1,
-        kind: 'field',
-        damage: applied.damage,
-        hp: hpPair(sides[0], sides[1]),
-      });
-      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
-      if (me.hp === 0) return { kind: 'unarmed' };
+    if (inField) {
+      const applied = damageTo(me, scaleDamage(FIELD_TICK, me));
+      events.push({ actor: (self ^ 1) as 0 | 1, kind: 'field', damage: applied.damage, hp: hpPair(...sides) });
+      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(...sides) });
     }
-    // 鬼敲门（X22）：门已经敲响，这一手真正出手之前先挨这一下；被打死就直接收场。
-    // 被控跳过时不走这里，记号一直挂着（同前有古人的口径）
-    if (me.knock) {
+    if (me.knock && canActOn(me)) {
       me.knock = false;
-      const applied = applyDamage(me, scaleDamage(KNOCK_BASE + Math.floor(me.f.hp * HP_BONUS * KNOCK_HP_SHARE), me));
-      events.push({ actor: self, kind: 'knock', damage: applied.damage, hp: hpPair(sides[0], sides[1]) });
-      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
+      const applied = damageTo(me, scaleDamage(KNOCK_BASE + Math.floor(me.f.hp * HP_BONUS * KNOCK_HP_SHARE), me));
+      events.push({ actor: self, kind: 'knock', damage: applied.damage, hp: hpPair(...sides) });
+      if (applied.playDead) events.push({ actor: self, kind: 'play-dead', hp: hpPair(...sides) });
+    }
+  };
+
+  /** 同步轮先建立这几种防守；旧时间轴在出手时建立。 */
+  const applyDefense = (me: Side, skill: SkillId): boolean => {
+    switch (skill) {
+      case 'myriad-self':
+        me.mirror += MYRIAD_MIRRORS;
+        break;
+      case 'reverse-seal':
+        me.reversal = REVERSAL_TIMES;
+        break;
+      case 'shadow-step':
+        me.blink = true;
+        break;
+      case 'abyss-field':
+        me.field = FIELD_TURNS;
+        break;
+      case 'tide-cannon':
+        me.charge = 1;
+        break;
+      default:
+        return false;
+    }
+    return true;
+  };
+
+  /** 一次出手（含主动招式），返回实际执行的动作；旧时间轴的生花在这里就地补一手。 */
+  const takeAction = (self: 0 | 1, locked?: Action, prepared = false): Action => {
+    const me = sides[self];
+    if (!rounds) {
+      beforeAction(self, sides[self ^ 1].field > 0);
       if (me.hp === 0) return { kind: 'unarmed' };
     }
     // 鲸派气功（X25）：聚过气以后，下一次真正出手不再听决策，直接放出（不经过 legalize：这门主动招已经 used）
-    if (me.charge > 0) {
+    if (me.charge > 0 && !prepared) {
       me.charge = 0;
       const foe = sides[self ^ 1];
       const action: Action = { kind: 'skill', skill: 'tide-cannon' };
       events.push({ actor: self, kind: 'decide', action, autoRelease: true, hp: hpPair(sides[0], sides[1]) });
       // 必中：不判闪避，也不吃魂影 / 替挡；泡泡护体照挡（和 ancient 的口径一致）
-      const applied = applyDamage(
+      const applied = damageTo(
         foe,
         scaleDamage(
           TIDE_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * TIDE_HP_SHARE),
@@ -1497,9 +1612,8 @@ export function runFight(
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       return action;
     }
-    const asked = controllers[self].decide(view(self));
-    // 封法宝 / 封招式（X21）：这一手按封住的类别过滤；「真正出手」一次就解封（同墨汁的口径，在被控跳过时不走这里）
-    const action = legalize(me, asked, me.sealed);
+    // 封法宝 / 封招式：同步轮的动作已经按开场视野验证，不再重判。
+    const action = locked ?? legalize(me, controllers[self].decide(view(self)), me.sealed);
     me.sealed = null;
     events.push({ actor: self, kind: 'decide', action, hp: hpPair(sides[0], sides[1]) });
     // 前有古人（X21）：古人先补一击（必中、直接走 applyDamage，不吃护身印），然后照常出这一手
@@ -1511,12 +1625,12 @@ export function runFight(
         foe.mirror -= 1;
         events.push({ actor: (self ^ 1) as 0 | 1, kind: 'mirror', hp: hpPair(sides[0], sides[1]) });
       } else {
-        const strike = applyDamage(foe, scaleDamage(ANCIENT_BASE, foe));
+        const strike = damageTo(foe, scaleDamage(ANCIENT_BASE, foe));
         events.push({ actor: self, kind: 'ancient', damage: strike.damage, hp: hpPair(sides[0], sides[1]) });
         if (strike.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
-      if (foe.hp === 0) return action;
+      if (!canActOn(foe)) return action;
     }
     // 墨汁：糊着眼的这次出手用掉一次（放招式也算一次，只是招式不受影响）
     const blinded = me.blind > 0;
@@ -1545,23 +1659,34 @@ export function runFight(
           }
         }
       }
+      if (prepared || applyDefense(me, action.skill)) {
+        events.push({
+          actor: self,
+          kind: 'skill',
+          skill: action.skill,
+          ...(action.skill === 'tide-cannon' ? { charging: true as const } : {}),
+          hp: hpPair(...sides),
+        });
+        return action;
+      }
       if (action.skill === 'bloom') {
-        const heal = Math.ceil((me.f.hp * 18) / 100);
-        me.hp = Math.min(me.f.hp, me.hp + heal);
-        events.push({ actor: self, kind: 'skill', skill: 'bloom', heal, hp: hpPair(sides[0], sides[1]) });
-        return takeAction(self); // 马上再出手一次（凭空生花已用过，再要也只是空手）
+        const amount = Math.ceil((me.f.hp * 18) / 100);
+        // 旧事件的解说报招式回复量（即使溢出），保持原有重放。
+        if (!rounds) me.hp = Math.min(me.f.hp, me.hp + amount);
+        events.push({ actor: self, kind: 'skill', skill: 'bloom', heal: amount, hp: hpPair(...sides) });
+        return rounds ? action : takeAction(self); // 同步切磋回血占一轮；PvE 保留追加出手
       }
       if (action.skill === 'lion-roar') {
         // 狮子吼的音波也算破势的一环，伤害吃半份破势（§平衡：主动招式别比普通攻击还弱）
         const applied = dealDamage(self, LION_BASE + Math.floor((foe.f.hp * HP_BONUS * LION_HP_SHARE) / 1));
-        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'lion-roar');
+        const landed = !applied.reversed && !applied.mirrored && canActOn(foe) && controlLands(self, 'lion-roar');
         if (landed) control(self, 'stun');
         events.push({
           actor: self,
           kind: 'skill',
           skill: 'lion-roar',
           damage: applied.damage,
-          ...(foe.hp > 0 && !landed ? { resisted: true as const } : {}),
+          ...(canActOn(foe) && !landed ? { resisted: true as const } : {}),
           hp: hpPair(sides[0], sides[1]),
         });
         if (applied.playDead)
@@ -1590,16 +1715,17 @@ export function runFight(
             Math.floor(me.f.power * POWER_FACTOR * 0.6) +
             Math.floor(foe.f.hp * HP_BONUS * WHALE_SONG_HP_SHARE),
         );
-        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'whale-song');
+        const landed = !applied.reversed && !applied.mirrored && canActOn(foe) && controlLands(self, 'whale-song');
         if (landed) control(self, 'sleep');
-        // 没哄睡也别白放：听着犯困，出手慢半拍（X20）；被弹回就没这回事
-        else if (!applied.reversed && !applied.mirrored && foe.hp > 0) foe.next += intervalOf(foe) * SLOW_FACTOR;
+        // 旧时间轴里没哄睡也会让对方出手慢半拍；同步轮不改变出手时刻。
+        else if (!rounds && !applied.reversed && !applied.mirrored && foe.hp > 0)
+          foe.next += intervalOf(foe) * SLOW_FACTOR;
         events.push({
           actor: self,
           kind: 'skill',
           skill: 'whale-song',
           damage: applied.damage,
-          ...(foe.hp > 0 && !landed ? { resisted: true as const } : {}),
+          ...(canActOn(foe) && !landed ? { resisted: true as const } : {}),
           hp: hpPair(sides[0], sides[1]),
         });
         if (applied.playDead)
@@ -1616,8 +1742,7 @@ export function runFight(
           self,
           18 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * GULP_HP_SHARE),
         );
-        const heal = Math.min(Math.floor(applied.damage / 2), me.f.hp - me.hp);
-        me.hp += heal;
+        const heal = recover(me, Math.floor(applied.damage / 2));
         events.push({
           actor: self,
           kind: 'skill',
@@ -1629,25 +1754,20 @@ export function runFight(
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
-      if (action.skill === 'myriad-self') {
-        // 万我：分出几重魂影——无数个「我」，杀不尽的替身；X23 切磋里必中也由魂影替（见 dealDamage）
-        me.mirror += MYRIAD_MIRRORS;
-        events.push({ actor: self, kind: 'skill', skill: 'myriad-self', hp: hpPair(sides[0], sides[1]) });
-      }
       if (action.skill === 'dream-chant') {
         // 魂牵梦绕：非切磋必中（切磋按 dodgeRate 判定）；控住就把对方神魂牵进梦里，下一拍动不了（入梦期间挨打不判闪避，同睡着）
         const applied = dealDamage(
           self,
           14 + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * CHANT_HP_SHARE),
         );
-        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'dream-chant');
+        const landed = !applied.reversed && !applied.mirrored && canActOn(foe) && controlLands(self, 'dream-chant');
         if (landed) control(self, 'dream');
         events.push({
           actor: self,
           kind: 'skill',
           skill: 'dream-chant',
           damage: applied.damage,
-          ...(foe.hp > 0 && !landed ? { resisted: true as const } : {}),
+          ...(canActOn(foe) && !landed ? { resisted: true as const } : {}),
           hp: hpPair(sides[0], sides[1]),
         });
         if (applied.playDead)
@@ -1698,14 +1818,14 @@ export function runFight(
           self,
           FAREWELL_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * FAREWELL_HP_SHARE),
         );
-        const landed = !applied.reversed && !applied.mirrored && foe.hp > 0 && controlLands(self, 'farewell-wind');
+        const landed = !applied.reversed && !applied.mirrored && canActOn(foe) && controlLands(self, 'farewell-wind');
         if (landed) control(self, 'float');
         events.push({
           actor: self,
           kind: 'skill',
           skill: 'farewell-wind',
           damage: applied.damage,
-          ...(foe.hp > 0 && !landed ? { resisted: true as const } : {}),
+          ...(canActOn(foe) && !landed ? { resisted: true as const } : {}),
           hp: hpPair(sides[0], sides[1]),
         });
         if (applied.playDead)
@@ -1728,7 +1848,7 @@ export function runFight(
           self,
           PALM_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * PALM_HP_SHARE),
         );
-        const sealed = !applied.reversed && !applied.mirrored && foe.hp > 0;
+        const sealed = !applied.reversed && !applied.mirrored && canActOn(foe);
         if (sealed) foe.sealed = 'weapon';
         events.push({
           actor: self,
@@ -1741,11 +1861,6 @@ export function runFight(
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
-      if (action.skill === 'reverse-seal') {
-        // 逆流护身印（X21）：双掌对逆流河虚抓，接下来挨到的那一次伤害按七成弹回去（REVERSAL_TIMES）
-        me.reversal = REVERSAL_TIMES;
-        events.push({ actor: self, kind: 'skill', skill: 'reverse-seal', hp: hpPair(sides[0], sides[1]) });
-      }
       if (action.skill === 'ancients') {
         // 前有古人（X21）：光阴长河里的古人挂着，下一次真正出手时先补一击
         me.ancient = true;
@@ -1756,18 +1871,15 @@ export function runFight(
         me.blind = 0;
         if (foe.bubbles > 0) {
           foe.bubbles -= 1;
-          const heal = Math.min(Math.floor(me.f.hp * EAT_HEAL), me.f.hp - me.hp);
-          me.hp += heal;
+          const heal = recover(me, Math.floor(me.f.hp * EAT_HEAL));
           events.push({ actor: self, kind: 'devour', what: 'bubble', heal, hp: hpPair(sides[0], sides[1]) });
         } else if (foe.mirror > 0) {
           foe.mirror -= 1;
-          const heal = Math.min(Math.floor(me.f.hp * EAT_MIRROR_HEAL), me.f.hp - me.hp);
-          me.hp += heal;
+          const heal = recover(me, Math.floor(me.f.hp * EAT_MIRROR_HEAL));
           events.push({ actor: self, kind: 'devour', what: 'mirror', heal, hp: hpPair(sides[0], sides[1]) });
         } else {
           const applied = dealDamage(self, EAT_BITE_BASE + Math.floor(me.f.power * 0.4));
-          const heal = Math.min(Math.floor(applied.damage / 2), me.f.hp - me.hp);
-          me.hp += heal;
+          const heal = recover(me, Math.floor(applied.damage / 2));
           events.push({
             actor: self,
             kind: 'devour',
@@ -1786,7 +1898,7 @@ export function runFight(
           self,
           HAND_BASE + Math.floor(me.f.power * POWER_FACTOR) + Math.floor(foe.f.hp * HP_BONUS * HAND_HP_SHARE),
         );
-        const sealed = !applied.reversed && !applied.mirrored && foe.hp > 0;
+        const sealed = !applied.reversed && !applied.mirrored && canActOn(foe);
         if (sealed) foe.sealed = 'skill';
         events.push({
           actor: self,
@@ -1812,7 +1924,7 @@ export function runFight(
           kind: 'skill',
           skill: 'headless-shadow',
           damage: applied.damage,
-          ...(foe.hp === 0 ? { behead: true as const } : {}),
+          ...(!rounds && foe.hp === 0 ? { behead: true as const } : {}),
           hp: hpPair(sides[0], sides[1]),
         });
       }
@@ -1826,10 +1938,12 @@ export function runFight(
         const passives = foe.f.skills.filter((id) => SKILLS[id].kind === '被动');
         if (passives.length > 0) {
           const sealedPassive = pick(rng, passives);
-          foe.sealedPassive = sealedPassive;
-          // 泡泡 / 灵兽的次数已经发下去了，封掉的时候立即清零
-          if (sealedPassive === 'bubble') foe.bubbles = 0;
-          if (sealedPassive === 'spirit-beast') foe.beastLeft = 0;
+          // 同步轮的被动仍可挡同轮反击，到轮末才封；旧时间轴立即生效。
+          if (!rounds) {
+            foe.sealedPassive = sealedPassive;
+            if (sealedPassive === 'bubble') foe.bubbles = 0;
+            if (sealedPassive === 'spirit-beast') foe.beastLeft = 0;
+          }
           events.push({
             actor: self,
             kind: 'skill',
@@ -1867,32 +1981,148 @@ export function runFight(
         if (applied.playDead)
           events.push({ actor: (self ^ 1) as 0 | 1, kind: 'play-dead', hp: hpPair(sides[0], sides[1]) });
       }
-      if (action.skill === 'tide-cannon') {
-        // 鲸派气功（X25）：这一拍只聚气、不造成伤害；下一次真正出手自动放出
-        me.charge = 1;
-        events.push({
-          actor: self,
-          kind: 'skill',
-          skill: 'tide-cannon',
-          charging: true,
-          hp: hpPair(sides[0], sides[1]),
-        });
-      }
-      if (action.skill === 'abyss-field') {
-        // 深渊领域（X25）：禁掉对方的闪避，对方每次出手前吃一口暗流；自己的攻击会一层层用掉它
-        me.field = FIELD_TURNS;
-        events.push({ actor: self, kind: 'skill', skill: 'abyss-field', hp: hpPair(sides[0], sides[1]) });
-      }
-      if (action.skill === 'shadow-step') {
-        // 瞬影（X25）：挨普通攻击全闪，自己下一次攻击必中；不因挨打消失
-        me.blink = true;
-        events.push({ actor: self, kind: 'skill', skill: 'shadow-step', hp: hpPair(sides[0], sides[1]) });
-      }
     } else {
       attack(self, action, blinded);
     }
     return action;
   };
+
+  if (rounds) {
+    const clone = (side: Side): Side => ({
+      ...side,
+      used: new Set(side.used),
+      moveUses: new Map(side.moveUses),
+    });
+    type Healing = Extract<BattleEvent, { kind: 'skill' | 'devour' }> & { heal: number };
+    for (round = 0; round < MAX_ACTIONS / 2 && sides.every((side) => side.hp > 0); round++) {
+      const lockedViews: [BattleView, BattleView] = [view(0), view(1)];
+      const lock = (self: 0 | 1): Action => {
+        try {
+          const me = sides[self];
+          const asked = controllers[self].decide(lockedViews[self]);
+          return me.skip || me.charge > 0 ? { kind: 'unarmed' } : legalize(me, asked, me.sealed);
+        } catch (error) {
+          if (error instanceof DecisionNeeded) error.need.views = lockedViews;
+          throw error;
+        }
+      };
+      const locked = [lock(0), lock(1)] as const;
+      const openingHp = hpPair(...sides);
+      const fields = [sides[0].field, sides[1].field];
+      const prepare = (self: 0 | 1): boolean => {
+        const action = locked[self];
+        return action.kind === 'skill' && applyDefense(sides[self], action.skill);
+      };
+      const prepared = [prepare(0), prepare(1)];
+      // 已挂的暗流与敲门声先结算，消耗同一份护体；这一轮铺开的领域不立刻触发暗流。
+      const before = ([0, 1] as const).map((self) => {
+        const offset = events.length;
+        if (!sides[self].skip) beforeAction(self, fields[self ^ 1] > 0);
+        return events.splice(offset);
+      });
+      const ready = [...sides] as const;
+      // 两手都从同一份状态出发，攻击方的一次性状态与防守方的护体各在一边扣。
+      const branches = ([0, 1] as const).map((self) => {
+        sides[0] = clone(ready[0]);
+        sides[1] = clone(ready[1]);
+        const me = sides[self];
+        const offset = events.length;
+        rng = rngFrom(`${seed}:round:${round}:side:${self}`);
+        me.controlled = false;
+        if (me.skip) {
+          events.push({ actor: self, kind: 'skip', cause: me.skipCause, hp: openingHp });
+          me.skip = false;
+          me.skipCause = 'stun';
+        } else {
+          takeAction(self, locked[self], prepared[self]);
+        }
+        return { own: me, target: sides[self ^ 1], events: events.splice(offset) };
+      });
+      const heals = branches.map((branch) =>
+        branch.events.find(
+          (event): event is Healing => (event.kind === 'skill' || event.kind === 'devour') && event.heal !== undefined,
+        ),
+      );
+      for (const self of [0, 1] as const) {
+        const { own } = branches[self];
+        const { target: hit, events: incoming } = branches[self ^ 1];
+        own.hp = hit.hp;
+        own.bubbles = hit.bubbles;
+        own.guardLeft = hit.guardLeft;
+        own.mirror = hit.mirror;
+        own.reversal = hit.reversal;
+        const shadow = incoming.find((event) => event.kind === 'skill' && event.skill === 'headless-shadow');
+        if (shadow?.kind === 'skill' && shadow.damage) {
+          const after = hit.hp + (heals[self]?.heal ?? 0);
+          // 鬼影自身打掉最后一口气才禁假死；回血能抵掉这击，随后被反伤打倒则仍可假死。
+          if (after <= 0 && after + shadow.damage > 0) shadow.behead = true;
+        }
+        sides[self] = own;
+      }
+      for (const { event, raw } of reactions.splice(0)) {
+        const victim = event.actor ^ 1;
+        const applied = applyDamage(sides[victim], raw, { deferKo: true, charging: ready[victim].charge > 0 });
+        event.damage = applied.damage;
+        if (event.kind === 'counter') event.blocked = applied.blocked;
+      }
+      const aftermath: BattleEvent[] = [];
+      for (const self of [0, 1] as const) {
+        const me = sides[self];
+        const hit = branches[self ^ 1].target;
+        const incoming = branches[self ^ 1].events;
+        const heal = heals[self];
+        if (heal) {
+          heal.heal = Math.min(heal.heal, me.f.hp - me.hp);
+          me.hp += heal.heal;
+        }
+        if (hit.skip && !ready[self].skip) {
+          me.skip = true;
+          me.controlled = true;
+          me.skipCause = hit.skipCause;
+        }
+        const beheaded = incoming.some((event) => event.kind === 'skill' && event.behead);
+        if (me.hp <= 0) {
+          if (!beheaded && hasSkill(me, 'play-dead') && !me.used.has('play-dead')) {
+            me.hp = 1;
+            me.used.add('play-dead');
+            me.skip = true;
+            me.skipCause = 'sham';
+            aftermath.push({ actor: self, kind: 'play-dead', deferred: true, hp: openingHp });
+          } else me.hp = 0;
+        }
+        // 同轮新挂的状态不回头改变这一轮，包括鬼画对假死和灵兽的封印。
+        for (const event of incoming) {
+          if (event.kind !== 'skill') continue;
+          if (event.sealed) me.sealed = event.sealed;
+          if (event.skill === 'ink' && !hasSkill(ready[self], 'ghost-eye')) me.blind = hit.blind;
+          if (event.skill === 'ghost-knock') me.knock = true;
+          if (event.paint) {
+            me.sealedPassive = event.paint;
+            if (event.paint === 'bubble') me.bubbles = 0;
+            if (event.paint === 'spirit-beast') me.beastLeft = 0;
+          }
+        }
+        me.field = Math.max(0, me.field - 1);
+      }
+      for (const self of [0, 1] as const) {
+        events.push({ actor: self, kind: 'round-action', hp: openingHp });
+        for (const event of [...before[self], ...branches[self].events]) events.push({ ...event, hp: openingHp });
+      }
+      events.push(...aftermath, { actor: 0, kind: 'round-end', hp: hpPair(...sides) });
+    }
+    const hp = hpPair(...sides);
+    const draw = hp[0] === hp[1];
+    const winner: 0 | 1 = hp[0] >= hp[1] ? 0 : 1;
+    events.push({
+      actor: winner,
+      kind: 'end',
+      winner,
+      ...(draw ? { draw: true as const } : {}),
+      reason: hp.includes(0) ? 'ko' : 'timeout',
+      hp,
+    });
+    return events;
+  }
 
   let actions = 0;
   while (sides[0].hp > 0 && sides[1].hp > 0 && actions < MAX_ACTIONS && !farewellEnd) {
@@ -1908,6 +2138,7 @@ export function runFight(
       // 轮到自己出手了：上一拍被控的「还没出手」解除，下一次控制才能再压上来（X20）
       me.controlled = false;
       const done = takeAction(self);
+      acted.add(self);
       // 鲸尾 / 扑击：用它出手后，下次出手间隔 ×1.15
       const heavy =
         (done.kind === 'weapon' && WEAPONS[done.weapon].heavy) || (done.kind === 'move' && MOVES[done.move].heavy);

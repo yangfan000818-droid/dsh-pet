@@ -737,7 +737,7 @@ function hitsOf(action: Action, events: BattleEvent[], decideIndex: number): num
   for (let j = decideIndex + 1; j < events.length; j += 1) {
     const kind = events[j].kind;
     // 狗全部放完以后才是追击 / 灵兽 / 收场，那些不算段数
-    if (kind === 'decide' || kind === 'end' || kind === 'combo' || kind === 'beast' || kind === 'counter') break;
+    if (endsSlot(kind) || kind === 'combo' || kind === 'beast' || kind === 'counter') break;
     if (
       kind === 'hit' ||
       kind === 'dodge' ||
@@ -782,7 +782,7 @@ function blockedHere(event: BattleEvent): boolean {
 /** 这一格里的挨打反应有没有被紧随其后的假死遁顶掉（假死遁自己播，不重复挨一下） */
 function playDeadAfter(events: BattleEvent[], index: number): boolean {
   const next = events[index + 1];
-  return next !== undefined && next.kind === 'play-dead';
+  return next !== undefined && next.kind === 'play-dead' && !next.deferred;
 }
 
 /** 渡劫（X4）失败那一下：动画池里的现有素材（名字形态播，不是 §2.3 的新素材） */
@@ -813,6 +813,11 @@ export interface TimelineOptions {
    * 键是 `events` 里的下标；重算前缀时同一句要一直在表里。
    */
   decideLines?: ReadonlyMap<number, string>;
+}
+
+/** 出手与收场的边界：同步轮也可能只有跳过，没有 decide。 */
+function endsSlot(kind: BattleEvent['kind']): boolean {
+  return kind === 'decide' || kind === 'end' || kind === 'round-action' || kind === 'round-end';
 }
 
 /** 这一格的出手（`decide` 排出来的；`closeSlot` 作废）。只有带飞行物的出手才会排出来 */
@@ -905,6 +910,8 @@ export function timeline(
     }
   }
   let cursor = OPEN_MS;
+  /** 同步轮当前这一手的第一步；旧时间轴仍由 decide 分段。 */
+  let roundSlot: number | null = null;
   /** 这一格里已经排了几件事（决定后面的错开多远） */
   let beat = 0;
   /** 这一格的出手（null = 没有出手格子：那一拍没有飞行物，台词与反应照旧排在 `at` 附近） */
@@ -928,6 +935,23 @@ export function timeline(
     }
     beat = 0;
     slot = null;
+  };
+
+  const closeRoundSlot = (): void => {
+    if (roundSlot === null) return;
+    // 末发飞行物可能没有受击反应；也要等它飞到。常驻领域等贴图不拦下一手。
+    let last = Math.max(...busy);
+    for (let i = roundSlot; i < steps.length; i += 1) {
+      const { at, shot, dash } = steps[i];
+      const flight =
+        shot && !shot.hold ? (shot.boomerang?.totalMs ?? shot.flightMs + (shot.count - 1) * shot.gapMs) : 0;
+      last = Math.max(last, at + Math.max(flight, dash?.ms ?? 0));
+    }
+    closeSlot();
+    cursor = Math.max(cursor, last + GAP_MS);
+    roundSlot = null;
+    lastImpact = null;
+    overrideActor = null;
   };
 
   /**
@@ -1069,7 +1093,8 @@ export function timeline(
     force = false,
   ): void => {
     const skinned = foeSkinOf(anim, who, foePrefix);
-    const at = impact - windupOf(skinned);
+    const start = impact - windupOf(skinned);
+    const at = roundSlot === null ? start : Math.max(cursor, start);
     const current = reacting[who];
     if (!force && current && at < current.until) {
       if (line !== undefined) steps.push({ at, who, line, hp });
@@ -1085,8 +1110,34 @@ export function timeline(
     // start 已经换成开场那两步；台词由 lineOf 决定（它说 null 的事件就只是没字，不是没画面）
     if (event.kind === 'start') continue;
 
+    if (event.kind === 'round-action') {
+      closeRoundSlot();
+      roundSlot = steps.length;
+      continue;
+    }
+    if (event.kind === 'round-end') {
+      closeRoundSlot();
+      // 假死遁在两手之后演，血条也要等倒下那段播完。
+      cursor = Math.max(cursor, busy[0] + GAP_MS, busy[1] + GAP_MS);
+      steps.push({ at: cursor, who: event.actor, hp: event.hp });
+      before = event.hp;
+      continue;
+    }
+    if (event.kind === 'play-dead' && event.deferred) {
+      closeRoundSlot();
+      const anim = foeSkinOf(PLAY_DEAD_ANIM, event.actor, foePrefix);
+      const line = sayOf(event);
+      pushAnim({ at: cursor, who: event.actor, anim, rate: reactRate(anim), line, hp: event.hp });
+      continue;
+    }
+
     if (event.kind === 'decide') {
-      closeSlot();
+      if (roundSlot === null) closeSlot();
+      else {
+        // 暗流、敲门先演一拍，再播这边锁好的动作；仍属于同一手。
+        cursor += beat * BEAT_MS;
+        beat = 0;
+      }
       // 鲸派气功（X25）：蓄力后的自动释放不播这一手动作，释放由紧随其后的 skill 事件自己排，
       // 不然聚气的护身印动作会闪一下又被降龙顶掉
       if (event.autoRelease) {
@@ -1135,7 +1186,9 @@ export function timeline(
     }
 
     if (event.kind === 'end') {
+      closeRoundSlot();
       closeSlot();
+      overrideActor = null;
       if (tribulation) {
         // 渡劫：只有自家这一边（引擎把「没扛住」的 end 排在 actor 1，这里统一排到 0），
         // 成功播 修炼-突破、失败播 工作状态-垂头叹气冒汗（池里的现有素材，名字形态）。
@@ -1153,6 +1206,11 @@ export function timeline(
         });
         continue;
       }
+      if (event.draw) {
+        const line = sayOf(event);
+        if (line) steps.push({ at: cursor, who: 0, line, hp: event.hp, closing: true });
+        continue;
+      }
       if (event.reason === 'farewell') {
         // 串门里被送友风送走（X16）：不演胜利 / 倒地，被送走的那位飘起来（命中时已经开始飘的接着播），
         // 胜负那句台词照旧。主人家这一侧送客、客人家那一侧等 sent-home，都由调用方按这一条收场。
@@ -1161,7 +1219,6 @@ export function timeline(
         const from = steps.length;
         pushReaction(cursor, loser, FLOAT_ANIM, event.hp);
         for (const step of steps.slice(from)) step.closing = true;
-        overrideActor = null;
         const line = sayOf(event);
         if (line) steps.push({ at: cursor, who: winner, line, hp: event.hp, closing: true });
         continue;
@@ -1175,7 +1232,6 @@ export function timeline(
         const anim = who === 1 && foePrefix ? `${foePrefix}-${action}` : `战斗-${action}`;
         pushAnim({ at: cursor, who, anim, rate: rateFor(anim, CLOSE_MS), hp: event.hp, closing: true });
       }
-      overrideActor = null;
       const line = sayOf(event);
       if (line) steps.push({ at: cursor, who: winner, line, hp: event.hp, closing: true });
       continue;
@@ -1256,12 +1312,13 @@ export function timeline(
         });
         continue;
       }
-      // 灵兽那一下被躲开（引擎只记一条 dodge）：它是这一格的最后一件事。灵兽照样召出来冲过去，只是扑了个空
-      const beast = current.beast && current.who !== event.actor && lastOfSlot(events, i);
+      // 旧时间轴用「最后一件事」识别灵兽扑空；同步轮有明确标记，不能把主攻最后一次闪避错当灵兽。
+      const beast =
+        event.beast || (roundSlot === null && current.beast && current.who !== event.actor && lastOfSlot(events, i));
       const append = ATTACK_SHOW['spirit-beast'];
       if (beast && append.fly) {
+        if (current.beast) beastLeft[current.who] -= 1;
         current.beast = false;
-        beastLeft[current.who] -= 1;
         const moment = Math.max(at, busy[current.who]);
         pushAnim({
           at: moment,
@@ -1485,10 +1542,9 @@ export function timeline(
       continue;
     }
 
-    // 深渊领域的暗流（X25）：对方每次出手前被黑雾扯一下。引擎把暗流排在对方 decide 之前，
-    // 那时上一格还没关，按拍的 `at` 会落进上一段动作里——压到上一格演完（SLOT_MS）再压
+    // 暗流在出手前；旧时间轴没有这一手的显式边界，得等上一格动作先播完。
     if (event.kind === 'field') {
-      const tick = Math.max(at, cursor + SLOT_MS);
+      const tick = roundSlot === null ? Math.max(at, cursor + SLOT_MS) : at;
       pushHold(tick, event.actor, '深渊黑雾', event.hp, { ms: 900, anchor: 'foe', dy: 0.12, shake: 3 });
       steps.push({ at: tick, who: event.actor, ...(line === undefined ? {} : { line }), hp: event.hp });
       continue;
@@ -1595,10 +1651,26 @@ export class LiveTimeline {
     this.options = options;
   }
 
-  /** 追加到下一个决策点的事件前缀（整段事件），返回这一段新排出来的步骤 */
+  /** 追加事件前缀，返回新排出来的步骤。同步轮只交付已经结算的整轮。 */
   push(events: BattleEvent[]): Step[] {
+    if (events.length === 0) return [];
+    let end = events.length;
+    if (events.some((event) => event.kind === 'round-action')) {
+      // 银托盘等多段飞行物在第一步就需要后续结果，不能用还没收齐的一手来排。
+      while (end > 0) {
+        const { kind } = events[end - 1];
+        if (kind === 'round-end' || kind === 'end' || kind === 'start') break;
+        end -= 1;
+      }
+    }
     this.cursor = 0;
-    const next = timeline(events, this.names, this.replay, this.skillSets, this.options);
+    const next = timeline(
+      end === events.length ? events : events.slice(0, end),
+      this.names,
+      this.replay,
+      this.skillSets,
+      this.options,
+    );
     const tail = next.slice(this.seen.length);
     this.seen = next;
     return tail;
@@ -1703,7 +1775,7 @@ function primaryOf(events: BattleEvent[], decideIndex: number, hits: number): nu
   let segment = 0;
   for (let j = decideIndex + 1; j < events.length && segment < hits; j += 1) {
     const event = events[j];
-    if (event.kind === 'decide' || event.kind === 'end' || event.kind === 'combo') break;
+    if (endsSlot(event.kind) || event.kind === 'combo' || (event.kind === 'dodge' && event.beast)) break;
     if (event.kind === 'hit' || (event.kind === 'skill' && event.damage !== undefined)) return segment + 1;
     if (event.kind === 'dodge' || event.kind === 'miss' || event.kind === 'decoy' || event.kind === 'mirror')
       segment += 1;
@@ -1718,7 +1790,7 @@ function primaryOf(events: BattleEvent[], decideIndex: number, hits: number): nu
 function secondOf(events: BattleEvent[], index: number): 'hit' | 'blocked' | 'decoy' | 'miss' | 'none' {
   for (let j = index + 1; j < events.length; j += 1) {
     const event = events[j];
-    if (event.kind === 'decide' || event.kind === 'end' || event.kind === 'combo') return 'none';
+    if (endsSlot(event.kind) || event.kind === 'combo' || (event.kind === 'dodge' && event.beast)) return 'none';
     if (event.kind === 'hit') return event.blocked ? 'blocked' : 'hit';
     if (event.kind === 'decoy') return 'decoy';
     if (event.kind === 'dodge' || event.kind === 'miss') return 'miss';
@@ -1726,10 +1798,10 @@ function secondOf(events: BattleEvent[], index: number): 'hit' | 'blocked' | 'de
   return 'none';
 }
 
-/** 这一件事是不是这一格的最后一件（后面紧跟下一格的 decide、收场，或者事件序列到头了） */
+/** 这一件事是不是这一格的最后一件（后面紧跟下一个边界，或者事件序列到头了） */
 function lastOfSlot(events: BattleEvent[], index: number): boolean {
   const next = events[index + 1];
-  return next === undefined || next.kind === 'decide' || next.kind === 'end';
+  return next === undefined || endsSlot(next.kind);
 }
 
 /** 一边的手：播一段素材（带倍速）、说一句台词 */

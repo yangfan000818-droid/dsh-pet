@@ -167,14 +167,8 @@ export interface Trip {
   /** 下一句的定时器 */
   talkTimer: ReturnType<typeof setTimeout> | null;
   pingTimer: ReturnType<typeof setInterval>;
-  /** 主人家请回时自家还在演送走那一拍（X16）：先记下，演到了再回家 */
+  /** 主人家在切磋演出期间请回客人：等自家收场再回家。 */
   pendingHome?: 'sent-home' | null;
-  /** 这一场以送友风收场（X16）：等 sent-home 的时候按 `farewell` 记，不按普通请回 */
-  farewell?: boolean;
-  /** 送友风是自己放的（X16）：回家日记照实说「把对方送得飘起来」 */
-  farewellBySelf?: boolean;
-  /** 演完送友风以后等 sent-home 的兜底定时器（15 秒没等到就自己 /v1/leave） */
-  farewellTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 /** 来自家做客的客人 */
@@ -198,8 +192,8 @@ export interface Hosting {
   openerTimer: ReturnType<typeof setTimeout> | null;
 }
 
-/** 回家的原因：到点 / 主人叫回（含家里有话要说、关了串门、退出）/ 被对方请回 / 失联 / 被送友风送走（X16） */
-export type HomeReason = 'time-up' | 'called' | 'sent-home' | 'lost' | 'farewell';
+/** 回家的原因：到点 / 主人叫回（含关了串门、退出）/ 被对方请回 / 失联。 */
+export type HomeReason = 'time-up' | 'called' | 'sent-home' | 'lost';
 
 /** 说一句话的选项：配图（表情包池里的名称，插件按池校验）；要不要联动播一段说话动画；气泡显示多久 */
 export interface SayOptions {
@@ -223,7 +217,7 @@ export interface TrialWindows {
  *   - host：invited = 已把 spar-invite 捎给客人，等它发 /v1/spar 来；card = 已回了名帖与随机数，
  *     等客人 reveal（对不上或超时都按客人认输）；showing = 开打了（演出在 battle 里跑）。
  *   - guest：asking = 已发了 /v1/spar（带着随机数的承诺）；showing = 在转播那一场（也在 battle 里跑）。
- * 战绩与奖励都在「开打」那一步记（两边同时记各自的账），演出只是回放：快进、客人走、退出都不会把账弄乱。
+ * 整场算好的局开演前记账；同步轮打完才记，没打完不补记。
  */
 export interface SparState {
   role: 'host' | 'guest';
@@ -231,9 +225,8 @@ export interface SparState {
   since: number;
   /** 等客人应战 / 亮随机数的定时器（超时按客人认输）；客人这一侧没有 */
   timer: ReturnType<typeof setTimeout> | null;
-  /** host：客人的承诺与名帖、自己亮出去的随机数 */
+  /** host：客人的随机数承诺和自己亮出去的随机数 */
   commit?: string;
-  guestCard?: SparCard;
   hostNonce?: string;
   /** X19 逐手局：这一场是不是逐手、自己这一侧选的方式（auto 也走逐手对传） */
   live?: boolean;
@@ -314,9 +307,9 @@ export interface SparShow {
     mode: TurnMode;
     /** 这一场的种子：`客人 / 挑战方随机数:主人家 / 应战方随机数` */
     seed: string;
-    /** 串门切磋的逐手局传 true（X16）：送友风打中时按 `:farewell` 那一路抽送走；隔空切磋不传 */
-    farewell?: boolean;
-    /** client：把这一手发给对面（轮到自家带 action，轮到对面不带）；认输（X26）带 forfeit */
+    /** 让协议层留住已确定的结局。 */
+    onEnd?: import('../battle-live').LiveServerOptions['onEnd'];
+    /** 发起方每轮传已锁定的动作，或单独发认输。 */
     sendTurn?: (
       body: { index: number; action?: Action; forfeit?: boolean },
       signal: AbortSignal,
@@ -428,26 +421,12 @@ export interface FeatureState {
   duelAccepted: DuelAccepted | null;
 }
 
-/**
- * 送客（X16 串门里送走也走这一条）：
- *   - `farewell` 给告别的话（空串 = 不说）；
- *   - `wave` 要不要挥手；
- *   - `floatAway` 客人窗口整扇往上飘、淡出（被送友风送走）；
- *   - `closeMs` 多久以后关窗（飘走的给 1.5 秒，普通送客 5 秒）。
- */
-export interface GuestOffOptions {
-  farewell?: string;
-  wave?: boolean;
-  floatAway?: boolean;
-  closeMs?: number;
-}
-
 /** 各块之间经上下文调的这些函数：入口全部挂好以后才会被调用（挂之前只建对象、存回调） */
 export interface FeatureFunctions {
   petId(): string;
   petRequest(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
   holdPet(steps: Step[], durationMs?: number): Promise<void>;
-  releasePet(afterMs: number): void;
+  releasePet(afterMs: number, held?: Promise<void>): void;
   say(text: string, options?: SayOptions): Promise<boolean>;
   personaPrompt(): string;
   systemPrompt(): string;
@@ -470,7 +449,7 @@ export interface FeatureFunctions {
   closeHost(): Promise<void>;
   visitActions(): Map<string, () => unknown>;
   letIn(accept: boolean): void;
-  sendGuestHome(options?: GuestOffOptions): void;
+  sendGuestHome(): void;
   goVisit(id: string): Promise<void>;
   visitLine(instruction: string, fallback: string): Promise<string>;
   notesOn(): boolean;
@@ -489,6 +468,8 @@ export interface FeatureFunctions {
   playPooled(name: string, rate: number): Promise<void>;
   openShowFx(foeBounds: () => Rect | null, foeOnLeft: () => boolean, foeShadow?: boolean): FxWindow;
   cultivationActions(): Map<string, () => unknown>;
+  /** 战斗中通用的「快进 / 认输」（和修炼无关）：开着修炼挂「修炼/」，关着挂「切磋/」 */
+  battleActions(): Map<string, () => unknown>;
   ensureAdventure(): AdventureFlow | null;
   runAdventure(): Promise<void>;
   closeAdventureShows(afterMs: number): void;
@@ -512,7 +493,6 @@ export interface FeatureFunctions {
   duelTurn(visitor: Visitor, index: number, action?: Action, forfeit?: boolean): Promise<SparTurnReply>;
   hostDuelConceded(visitor: Visitor, why: 'mismatch' | 'late'): void;
   startGuestSpar(invite?: { live: boolean }): Promise<void>;
-  runHostSparShow(visitor: Visitor, state: SparState, guestNonce: string, guestLine: string): Promise<void>;
   duelChallengeActions(): Map<string, () => unknown>;
   answerDuel(accept: boolean): Promise<void>;
   /** 群架（X27）：「修炼」子菜单里的 3 / 4 / 5 人演示项 */
@@ -561,6 +541,8 @@ export interface FeatureContext {
 export const MENU_VISIT_GROUP = '串门';
 /** 「修炼」子菜单：和「串门」一样按前缀收成子菜单 */
 export const MENU_CULTIVATION_GROUP = '修炼';
+/** 「切磋」子菜单：和修炼解绑的独立根菜单（串门切磋、隔空挑战、打的时候的快进 / 认输） */
+export const MENU_SPAR_GROUP = '切磋';
 /** 「群架」子菜单：本地演示与联机共用这一组（3 / 4 / 5 人、联机开桌、加入邻居） */
 export const MENU_BRAWL_GROUP = '群架';
 /** 打完到关掉心魔窗口 / 擂台之间的停顿（§X14：1 秒——run() 结束时收场动作只剩约 0.6 秒，停这么久正好播完） */

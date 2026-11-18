@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fighterAt } from './battle-testkit.ts';
+import { SPAR_OPTIONS } from './spar-rules.ts';
 import { MAX_STAGE, tribulationStrikes } from './cultivation.ts';
 import {
   fight,
@@ -1343,6 +1344,104 @@ test('X17 逐手演出：分段追加的时间线和整场生成的时间线对�
   assert.deepEqual(segmented, whole, '分段接起来必须和整场时间线一致');
   assert.deepEqual(live.steps(), whole, '已经排好的全部步骤也一致');
   assert.ok(segmented.length > 0);
+});
+
+test('同步轮：同轮双亡时先演完两手，再一起清空两条血', async () => {
+  const fighter: Fighter = { name: '小鱼', hp: 1, power: 20, agility: 1, speed: 20, weapons: ['firework'], skills: [] };
+  const firework = { decide: (): Action => ({ kind: 'weapon', weapon: 'firework' }) };
+  const events = fight(fighter, { ...fighter, name: '心魔' }, 'double-ko', [firework, firework], SPAR_OPTIONS);
+  const steps = timeline(events, NAMES, seq());
+  const shots = shotsOf(steps);
+  assert.deepEqual(
+    shots.map((step) => step.who),
+    [0, 1],
+  );
+  const hpChange = steps.find((step) => step.hp[0] === 0 || step.hp[1] === 0);
+  assert.ok(hpChange);
+  assert.deepEqual(hpChange.hp, [0, 0]);
+  assert.ok(hpChange.at > impactOf(shots[1]));
+  assert.ok(steps.filter((step) => step.at < hpChange.at).every((step) => step.hp.every((value) => value === 1)));
+  for (const step of animsOf(steps, '受击-炸黑')) {
+    assert.ok(hpChange.at >= step.at + animLength(step.anim!, step.rate!));
+  }
+  const { show, self, arena } = makeShow(steps);
+  show.skip();
+  await show.run();
+  assert.match(self.said[0][0], /平手/);
+  assert.deepEqual(arena, [0]);
+});
+
+test('同步轮增量：跳过、出手前伤害、托盘两段与平局收场在任何切点都不串段', () => {
+  const tray: Action = { kind: 'weapon', weapon: 'tray' };
+  const boundary = (actor: 0 | 1): BattleEvent => ({ actor, kind: 'round-action', hp });
+  const roundEnd: BattleEvent = { actor: 0, kind: 'round-end', hp };
+  const events: BattleEvent[] = [
+    start(0),
+    boundary(0),
+    decide(0, { kind: 'skill', skill: 'lion-roar' }),
+    { actor: 0, kind: 'skill', skill: 'lion-roar', damage: 10, hp },
+    boundary(1),
+    decide(1, UNARMED),
+    hit(1, 10, hp),
+    roundEnd,
+    boundary(0),
+    { actor: 1, kind: 'field', damage: 9, hp },
+    { actor: 0, kind: 'knock', damage: 9, hp },
+    decide(0, tray),
+    dodge(1),
+    hit(0, 6, hp, false, 'tray'),
+    boundary(1),
+    { actor: 1, kind: 'skip', cause: 'stun', hp },
+    roundEnd,
+    { actor: 0, kind: 'end', reason: 'timeout', winner: 0, draw: true, hp },
+  ];
+  const custom = '托盘来啦！';
+  const options = {
+    decideLines: new Map([[events.findIndex((event) => event.kind === 'decide' && event.action === tray), custom]]),
+  };
+  const whole = timeline(events, NAMES, seq(), undefined, options);
+  for (let cut = 0; cut <= events.length; cut++) {
+    const live = new LiveTimeline(NAMES, seq(), undefined, options);
+    assert.deepEqual([...live.push(events.slice(0, cut)), ...live.push(events)], whole, `切点 ${cut}`);
+  }
+  const trays = shotsOf(whole).filter((step) => step.shot.track === 'boomerang');
+  assert.equal(trays.length, 1);
+  const [shot] = trays;
+  assert.equal(shot.shot.boomerang?.second, 'hit');
+  const knock = shotsOf(whole).find((step) => step.shot.kind === '门');
+  const field = shotsOf(whole).find((step) => step.shot.kind === '深渊黑雾');
+  const trayMove = whole.find((step) => step.line === custom);
+  assert.ok(field && knock && trayMove && field.at < knock.at && knock.at < trayMove.at);
+  const skipped = whole.find((step) => step.who === 1 && /动弹不得|错过了出手/.test(step.line ?? ''));
+  assert.ok(skipped && shot.shot.boomerang && skipped.at > shot.at + shot.shot.boomerang.totalMs);
+  assert.equal(whole.filter((step) => step.closing).length, 1);
+  assert.match(whole[whole.length - 1].line ?? '', /平手/);
+});
+
+test('同步轮：上一手末发追击打空也要等飞行物飞到才开始下一手', () => {
+  const tail: Action = { kind: 'weapon', weapon: 'whale-tail' };
+  const steps = timeline(
+    [
+      start(0),
+      { actor: 0, kind: 'round-action', hp },
+      decide(0, tail),
+      hit(0, 10, hp, true, 'whale-tail'),
+      combo(0, 10, hp, true),
+      dodge(1),
+      { actor: 1, kind: 'round-action', hp },
+      decide(1, UNARMED),
+      hit(1, 10, hp),
+      { actor: 0, kind: 'round-end', hp },
+    ],
+    NAMES,
+    seq(),
+  );
+  const lastShot = shotsOf(steps)
+    .filter((step) => step.who === 0)
+    .pop();
+  const reply = animsOf(steps, ATTACK_SHOW.unarmed.action)[0];
+  assert.ok(lastShot?.shot.miss);
+  assert.ok(reply.at >= impactOf(lastShot));
 });
 
 test('X17 逐手演出：AI 给的台词替掉这一手模板解说里自家宠物的那句', () => {

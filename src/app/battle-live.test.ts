@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { legalChoices, startLiveBattle, startLiveClient, startLiveServer, toneOf } from './battle-live.ts';
+import { legalChoices, startLiveBattle, startLiveClient, startLiveServer, toneOf, turnPrompt } from './battle-live.ts';
 import type { LiveVersus } from './battle-live.ts';
 import { fight, rngFrom } from './battle.ts';
 import type { BattleEvent, BattleView, Controller, Fighter } from './battle.ts';
@@ -217,6 +217,26 @@ test('X17 出招分类：控制、回复保命与伤害按动作效果归类', (
     [{ kind: 'unarmed' }, 'damage'],
   ] as const;
   for (const [action, tone] of cases) assert.equal(toneOf(action), tone);
+});
+
+test('同步轮面板与 AI 说明给出必中法宝的取舍，旧模式说明不变', () => {
+  const view: BattleView = {
+    self: 0,
+    hp: [230, 230],
+    maxHp: [230, 230],
+    you: { weapons: ['firework', 'tray'], skills: ['bloom'], used: [], skillUsesLeft: 3 },
+    foe: { weapons: ['firework'], skills: ['bloom'] },
+  };
+  const roundView = { ...view, round: 0 };
+  const [firework, tray] = legalChoices(roundView);
+  assert.match(firework.effect, /必中.*60%.*不连击/);
+  assert.match(tray.effect, /回旋段必中.*60%/);
+  const prompt = turnPrompt(roundView, ['甲', '乙']);
+  assert.ok(prompt.includes(`烟花（${firework.effect}）`));
+  assert.ok(prompt.includes(`银托盘（${tray.effect}）`));
+  assert.match(prompt, /回复18%气血，占用本轮动作/);
+  assert.doesNotMatch(prompt, /马上再出一手/);
+  assert.doesNotMatch(turnPrompt(view, ['甲', '乙']), /不连击|60% 破势/);
 });
 
 test('X17 出招分类：legalChoices 带上 tone，pick 与动作顺序不变', () => {
